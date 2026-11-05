@@ -17,11 +17,11 @@ import json
 import sys
 import os
 
-from awscli.compat import six
 from awscli.help import PosixHelpRenderer, ExecutableNotFoundError
 from awscli.help import WindowsHelpRenderer, ProviderHelpCommand, HelpCommand
 from awscli.help import TopicListerCommand, TopicHelpCommand
 from awscli.argparser import HELP_BLURB
+from awscli.compat import StringIO
 
 
 class HelpSpyMixin(object):
@@ -96,18 +96,30 @@ class TestHelpPager(unittest.TestCase):
                          pager_cmd.split())
 
     @skip_if_windows('Requires posix system.')
-    def test_no_groff_exists(self):
+    def test_no_groff_or_mandoc_exists(self):
         renderer = FakePosixHelpRenderer()
         renderer.exists_on_path['groff'] = False
-        expected_error = 'Could not find executable named "groff"'
+        renderer.exists_on_path['mandoc'] = False
+        expected_error = 'Could not find executable named "groff or mandoc"'
         with self.assertRaisesRegex(ExecutableNotFoundError, expected_error):
             renderer.render('foo')
+
+    @skip_if_windows('Requires POSIX system.')
+    def test_renderer_falls_back_to_mandoc(self):
+        stdout = StringIO()
+        renderer = FakePosixHelpRenderer(output_stream=stdout)
+
+        renderer.exists_on_path['groff'] = False
+        renderer.exists_on_path['mandoc'] = True
+        renderer.mock_popen.communicate.return_value = (b'foo', '')
+        renderer.render('foo')
+        self.assertEqual(stdout.getvalue(), 'foo\n')
 
     @skip_if_windows('Requires POSIX system.')
     def test_no_pager_exists(self):
         fake_pager = 'foobar'
         os.environ['MANPAGER'] = fake_pager
-        stdout = six.StringIO()
+        stdout = StringIO()
         renderer = FakePosixHelpRenderer(output_stream=stdout)
         renderer.exists_on_path[fake_pager] = False
 

@@ -14,7 +14,6 @@ import sys
 import logging
 
 from awscli.customizations.commands import BasicCommand
-from awscli.compat import six
 
 from . import PREDEFINED_SECTION_NAMES
 
@@ -34,8 +33,12 @@ class ConfigureGetCommand(BasicCommand):
          'cli_type_name': 'string', 'positional_arg': True},
     ]
 
-    def __init__(self, session, stream=sys.stdout, error_stream=sys.stderr):
+    def __init__(self, session, stream=None, error_stream=None):
         super(ConfigureGetCommand, self).__init__(session)
+        if stream is None:
+            stream = sys.stdout
+        if error_stream is None:
+            error_stream = sys.stderr
         self._stream = stream
         self._error_stream = error_stream
 
@@ -52,7 +55,7 @@ class ConfigureGetCommand(BasicCommand):
 
         LOG.debug(u'Config value retrieved: %s' % value)
 
-        if isinstance(value, six.string_types):
+        if isinstance(value, str):
             self._stream.write(value)
             self._stream.write('\n')
             return 0

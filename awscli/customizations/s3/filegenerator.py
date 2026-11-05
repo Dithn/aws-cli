@@ -21,7 +21,6 @@ from botocore.exceptions import ClientError
 from awscli.customizations.s3.utils import find_bucket_key, get_file_stat
 from awscli.customizations.s3.utils import BucketLister, create_warning, \
     find_dest_path_comp_key, EPOCH_TIME
-from awscli.compat import six
 from awscli.compat import queue
 
 _open = open
@@ -95,7 +94,8 @@ class FileDecodingError(Exception):
 class FileStat(object):
     def __init__(self, src, dest=None, compare_key=None, size=None,
                  last_update=None, src_type=None, dest_type=None,
-                 operation_name=None, response_data=None):
+                 operation_name=None, response_data=None, etag=None,
+                 case_conflict_submitted=None, case_conflict_key=None,):
         self.src = src
         self.dest = dest
         self.compare_key = compare_key
@@ -105,6 +105,9 @@ class FileStat(object):
         self.dest_type = dest_type
         self.operation_name = operation_name
         self.response_data = response_data
+        self.etag = etag
+        self.case_conflict_submitted = case_conflict_submitted
+        self.case_conflict_key = case_conflict_key
 
 
 class FileGenerator(object):
@@ -153,6 +156,7 @@ class FileGenerator(object):
         src_type = file_stat_kwargs['src_type']
         file_stat_kwargs['size'] = extra_information['Size']
         file_stat_kwargs['last_update'] = extra_information['LastModified']
+        file_stat_kwargs['etag'] = extra_information.get('ETag')
 
         # S3 objects require the response data retrieved from HeadObject
         # and ListObject
@@ -221,7 +225,7 @@ class FileGenerator(object):
             return file_path, {'Size': size, 'LastModified': last_update}
 
     def _validate_update_time(self, update_time, path):
-        # If the update time is None we know we ran into an invalid tiemstamp.
+        # If the update time is None we know we ran into an invalid timestamp.
         if update_time is None:
             warning = create_warning(
                 path=path,
@@ -234,7 +238,7 @@ class FileGenerator(object):
 
     def normalize_sort(self, names, os_sep, character):
         """
-        The purpose of this function is to ensure that the same path seperator
+        The purpose of this function is to ensure that the same path separator
         is used when sorting.  In windows, the path operator is a backslash as
         opposed to a forward slash which can lead to differences in sorting
         between s3 and a windows machine.
@@ -250,7 +254,7 @@ class FileGenerator(object):
         happens we warn using a FileDecodingError that provides more
         information into what's going on.
         """
-        if not isinstance(filename, six.text_type):
+        if not isinstance(filename, str):
             decoding_error = FileDecodingError(dirname, filename)
             warning = create_warning(repr(filename),
                                      decoding_error.error_message)
@@ -367,4 +371,5 @@ class FileGenerator(object):
         response['Size'] = int(response.pop('ContentLength'))
         last_update = parse(response['LastModified'])
         response['LastModified'] = last_update.astimezone(tzlocal())
+        response['ETag'] = response.pop('ETag', None)
         return s3_path, response

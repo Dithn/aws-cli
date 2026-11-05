@@ -98,7 +98,7 @@ The valid values of the ``output`` configuration variable are:
 ``cli_timestamp_format`` controls the format of timestamps displayed by the AWS CLI.
 The valid values of the ``cli_timestamp_format`` configuration variable are:
 
-* none - Display the timestamp exactly as received from the HTTP response.
+* wire - Display the timestamp exactly as received from the HTTP response.
 * iso8601 - Reformat timestamp using iso8601 in the UTC timezone.
 
 ``cli_follow_urlparam`` controls whether or not the CLI will attempt to follow
@@ -231,7 +231,9 @@ in the AWS CLI config file:
   the initial ``assume-role`` call. This parameter cannot be provided
   alongside ``source_profile``. Valid values are:
 
-  * ``Environment`` to pull source credentials from environment variables.
+  * ``Environment`` to pull source credentials from environment variables. Note
+    this credential source does not work alongside the ``AWS_PROFILE``
+    environment variable.
   * ``Ec2InstanceMetadata`` to use the EC2 instance role as source credentials.
   * ``EcsContainer`` to use the ECS container credentials as the source
     credentials.

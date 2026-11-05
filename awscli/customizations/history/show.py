@@ -19,7 +19,6 @@ import xml.dom.minidom
 import colorama
 
 from awscli.table import COLORAMA_KWARGS
-from awscli.compat import six
 from awscli.customizations.history.commands import HistorySubcommand
 from awscli.customizations.history.filters import RegexFilter
 
@@ -213,7 +212,7 @@ class DetailedFormatter(Formatter):
         self._write_output(formatted_value)
 
     def _write_output(self, content):
-        if isinstance(content, six.text_type):
+        if isinstance(content, str):
             content = content.encode('utf-8')
         self._output.write(content)
 
@@ -278,7 +277,7 @@ class SectionValuePrettyFormatter(object):
         elif self._is_xml(body):
             # TODO: Figure out a way to minimize the number of times we have
             # to parse the XML. Currently at worst, it will take three times.
-            # One to determine if it is XML, another to stip whitespace, and
+            # One to determine if it is XML, another to strip whitespace, and
             # a third to convert to make it pretty. This is an issue as it
             # can cause issues when there are large XML payloads such as
             # an s3 ListObjects call.

@@ -17,10 +17,10 @@ import logging
 import botocore
 import collections
 
+from awscli.compat import get_current_datetime
 from awscli.customizations.cloudformation import exceptions
 from awscli.customizations.cloudformation.artifact_exporter import mktempfile, parse_s3_url
 
-from datetime import datetime
 
 LOG = logging.getLogger(__name__)
 
@@ -85,7 +85,7 @@ class Deployer(object):
         :return:
         """
 
-        now = datetime.utcnow().isoformat()
+        now = get_current_datetime().isoformat()
         description = "Created by AWS CLI at {0} UTC".format(now)
 
         # Each changeset will get a unique name based on time
@@ -177,17 +177,20 @@ class Deployer(object):
                                "Status: {1}. Reason: {2}"
                                .format(ex, status, reason))
 
-    def execute_changeset(self, changeset_id, stack_name):
+    def execute_changeset(self, changeset_id, stack_name,
+                          disable_rollback=False):
         """
         Calls CloudFormation to execute changeset
 
         :param changeset_id: ID of the changeset
         :param stack_name: Name or ID of the stack
+        :param disable_rollback: Disable rollback of all resource changes
         :return: Response from execute-change-set call
         """
         return self._client.execute_change_set(
                 ChangeSetName=changeset_id,
-                StackName=stack_name)
+                StackName=stack_name,
+                DisableRollback=disable_rollback)
 
     def wait_for_execute(self, stack_name, changeset_type):
 

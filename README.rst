@@ -14,6 +14,21 @@ Jump to:
 -  `Getting Help <#getting-help>`__
 -  `More Resources <#more-resources>`__
 
+
+AWS CLI v1 is in Maintenance Mode
+---------------------------------
+
+The AWS CLI v1 entered maintenance mode on August 5, 2026 and will reach
+end-of-support on July 15, 2027. During maintenance mode, AWS limits releases
+to critical bug fixes and security issues only. The AWS CLI v1 will not receive
+API updates for new or existing services, or be updated to support new regions.
+
+We recommend that you migrate to
+`AWS CLI v2 <https://docs.aws.amazon.com/cli/latest/userguide/cliv2-migration.html>`__.
+For more information, see the
+`maintenance mode announcement <https://aws.amazon.com/blogs/developer/cli-v1-maintenance-mode-announcement/>`__,
+and the `update regarding dependency versions <https://aws.amazon.com/blogs/developer/aws-cli-v1-maintenance-mode-announcing-changes-to-dependency-updates/>`__.
+
 Getting Started
 ---------------
 
@@ -26,21 +41,19 @@ Requirements
 
 The aws-cli package works on Python versions:
 
--  3.6.x and greater
--  3.7.x and greater
--  3.8.x and greater
+-  3.10.x and greater
+-  3.11.x and greater
+-  3.12.x and greater
+-  3.13.x and greater
+-  3.14.x and greater
 
-On 01/15/2021 deprecation for Python 2.7 was announced and support was dropped
-on 07/15/2021. To avoid disruption, customers using the AWS CLI on Python 2.7 may
-need to upgrade their version of Python or pin the version of the AWS CLI. For
-more information, see this `blog post <https://aws.amazon.com/blogs/developer/announcing-end-of-support-for-python-2-7-in-aws-sdk-for-python-and-aws-cli-v1/>`__.
+Notices
+~~~~~~~
 
-On 10/29/2020 support for Python 3.4 and Python 3.5 was deprecated and
-support was dropped on 02/01/2021. Customers using the AWS CLI on
-Python 3.4 or 3.5 will need to upgrade their version of Python to
-continue receiving feature and security updates. For more information,
-see this `blog
-post <https://aws.amazon.com/blogs/developer/announcing-the-end-of-support-for-python-3-4-and-3-5-in-the-aws-sdk-for-python-and-aws-cli-v1/>`__.
+On 2026-04-29, support for Python 3.9 ended for the AWS CLI. This follows the
+Python Software Foundation `end of support <https://peps.python.org/pep-0596/#lifespan>`__
+for the runtime which occurred on 2025-10-31.
+For more information, see this `blog post <https://aws.amazon.com/blogs/developer/python-support-policy-updates-for-aws-sdks-and-tools/>`__.
 
 *Attention!*
 
@@ -52,7 +65,8 @@ any important security bulletins related to aws-cli.*
 Maintenance and Support for CLI Major Versions
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The AWS CLI version 1 was made generally available on 09/02/2013 and is currently in the full support phase of the availability life cycle.
+The AWS CLI version 1 entered maintenance mode on August 5, 2026 and will reach
+end-of-support on July 15, 2027.
 
 For information about maintenance and support for SDK major versions and their underlying dependencies, see the `Maintenance Policy <https://docs.aws.amazon.com/credref/latest/refdocs/maint-policy.html>`__ section in the *AWS SDKs and Tools Shared Configuration and Credentials Reference Guide*.
 
@@ -86,7 +100,7 @@ or for your user:
    $ python -m pip install --user awscli
 
 If you have the aws-cli package installed and want to upgrade to the
-latest version you can run:
+latest version, you can run:
 
 ::
 
@@ -155,7 +169,7 @@ this:
    aws_secret_access_key=MYSECRETKEY
 
    [testing]
-   aws_access_key_id=MYACCESKEY
+   aws_access_key_id=MYACCESSKEY
    aws_secret_access_key=MYSECRETKEY
 
 and place it in ``~/.aws/credentials`` (or in
@@ -219,7 +233,7 @@ for more information.
 
 For more information about configuration options, please refer to the
 `AWS CLI Configuration Variables
-topic <http://docs.aws.amazon.com/cli/latest/topic/config-vars.html#cli-aws-help-config-vars>`__.
+topic <https://docs.aws.amazon.com/cli/latest/topic/config-vars.html#cli-aws-help-config-vars>`__.
 You can access this topic from the AWS CLI as well by running
 ``aws help config-vars``.
 

@@ -16,15 +16,13 @@ import sys
 import zipfile
 import tempfile
 import contextlib
-from datetime import datetime
 
 from botocore.exceptions import ClientError
 
-from awscli.compat import six
 from awscli.customizations.codedeploy.utils import validate_s3_location
 from awscli.customizations.commands import BasicCommand
-from awscli.compat import ZIP_COMPRESSION_MODE
-
+from awscli.compat import BytesIO, ZIP_COMPRESSION_MODE, get_current_datetime
+from awscli.utils import create_nested_client
 
 ONE_MB = 1 << 20
 MULTIPART_LIMIT = 6 * ONE_MB
@@ -62,8 +60,8 @@ class Push(BasicCommand):
                 'revision to be uploaded to Amazon S3. You must specify both '
                 'a bucket and a key that represent the Amazon S3 bucket name '
                 'and the object key name. Content will be zipped before '
-                'uploading. Use the format s3://\<bucket\>/\<key\>'
-            )
+                'uploading. Use the format s3://<bucket>/<key>'
+            ),
         },
         {
             'name': 'ignore-hidden-files',
@@ -108,13 +106,15 @@ class Push(BasicCommand):
 
     def _run_main(self, parsed_args, parsed_globals):
         self._validate_args(parsed_args)
-        self.codedeploy = self._session.create_client(
+        self.codedeploy = create_nested_client(
+            self._session,
             'codedeploy',
             region_name=parsed_globals.region,
             endpoint_url=parsed_globals.endpoint_url,
             verify=parsed_globals.verify_ssl
         )
-        self.s3 = self._session.create_client(
+        self.s3 = create_nested_client(
+            self._session,
             's3',
             region_name=parsed_globals.region
         )
@@ -131,7 +131,7 @@ class Push(BasicCommand):
         if not parsed_args.description:
             parsed_args.description = (
                 'Uploaded by AWS CLI {0} UTC'.format(
-                    datetime.utcnow().isoformat()
+                    get_current_datetime().isoformat()
                 )
             )
 
@@ -246,7 +246,7 @@ class Push(BasicCommand):
                     Key=params.key,
                     UploadId=upload_id,
                     PartNumber=part_num,
-                    Body=six.BytesIO(data)
+                    Body=BytesIO(data)
                 )
                 multipart_list.append({
                     'PartNumber': part_num,

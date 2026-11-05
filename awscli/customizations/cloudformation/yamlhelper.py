@@ -16,13 +16,11 @@ from botocore.compat import OrderedDict
 import yaml
 from yaml.resolver import ScalarNode, SequenceNode
 
-from awscli.compat import six
-
 
 def intrinsics_multi_constructor(loader, tag_prefix, node):
     """
     YAML constructor to parse CloudFormation intrinsics.
-    This will return a dictionary with key being the instrinsic name
+    This will return a dictionary with key being the intrinsic name
     """
 
     # Get the actual tag name excluding the first exclamation
@@ -35,7 +33,7 @@ def intrinsics_multi_constructor(loader, tag_prefix, node):
 
     cfntag = prefix + tag
 
-    if tag == "GetAtt" and isinstance(node.value, six.string_types):
+    if tag == "GetAtt" and isinstance(node.value, str):
         # ShortHand notation for !GetAtt accepts Resource.Attribute format
         # while the standard notation is to use an array
         # [Resource, Attribute]. Convert shorthand to standard format

@@ -39,11 +39,49 @@ def register_removals(event_handler):
                                         'list-bootstrap-actions',
                                         'list-instance-groups',
                                         'set-termination-protection',
-                                        'set-visible-to-all-users'])
+                                        'set-keep-job-flow-alive-when-no-steps',
+                                        'set-visible-to-all-users',
+                                        'set-unhealthy-node-replacement'])
     cmd_remover.remove(on_event='building-command-table.kinesis',
                        remove_commands=['subscribe-to-shard'])
     cmd_remover.remove(on_event='building-command-table.lexv2-runtime',
                          remove_commands=['start-conversation'])
+    cmd_remover.remove(on_event='building-command-table.lambda',
+                         remove_commands=['invoke-with-response-stream'])
+    cmd_remover.remove(on_event='building-command-table.sagemaker-runtime',
+                         remove_commands=['invoke-endpoint-with-response-stream'])
+    cmd_remover.remove(on_event='building-command-table.bedrock-runtime',
+                         remove_commands=['invoke-model-with-response-stream',
+                                          'invoke-model-with-bidirectional-stream',
+                                          'converse-stream'])
+    cmd_remover.remove(on_event='building-command-table.bedrock-agent-runtime',
+                         remove_commands=['agentic-retrieve-stream',
+                                          'invoke-agent',
+                                          'invoke-flow',
+                                          'invoke-inline-agent',
+                                          'optimize-prompt',
+                                          'retrieve-and-generate-stream'])
+    cmd_remover.remove(on_event='building-command-table.bedrock-agentcore',
+                        remove_commands=['invoke-code-interpreter',
+                                         'invoke-agent-runtime-command',
+                                         'invoke-harness'])
+    cmd_remover.remove(on_event='building-command-table.qbusiness',
+                        remove_commands=['chat'])
+    cmd_remover.remove(on_event='building-command-table.iotsitewise',
+                        remove_commands=['invoke-assistant'])
+    cmd_remover.remove(on_event='building-command-table.logs',
+                        remove_commands=['get-log-object'])
+    cmd_remover.remove(
+        on_event='building-command-table.connecthealth',
+        remove_commands=['start-medical-scribe-listening-session'],
+    )
+    cmd_remover.remove(on_event='building-command-table.polly',
+                        remove_commands=['start-speech-synthesis-stream'])
+    cmd_remover.remove(
+        on_event='building-command-table.devops-agent',
+        remove_commands=['send-message'],
+    )
+
 
 class CommandRemover(object):
     def __init__(self, events):

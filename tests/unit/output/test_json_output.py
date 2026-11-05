@@ -11,14 +11,17 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
+import base64
+import contextlib
+import io
+import sys
 from botocore.compat import json
 import platform
-from awscli.compat import six
 from awscli.formatter import JSONFormatter
 
 from awscli.testutils import BaseAWSCommandParamsTest, unittest
 from awscli.testutils import mock, skip_if_windows
-from awscli.compat import get_stdout_text_writer
+from awscli.compat import StringIO, get_stdout_text_writer
 
 
 class TestGetPasswordData(BaseAWSCommandParamsTest):
@@ -88,7 +91,7 @@ class TestListUsers(BaseAWSCommandParamsTest):
     def test_zero_value_is_printed(self):
         # Even though the integer 0 is false-like, we still
         # should be printing it to stdout if a jmespath query
-        # evalutes to 0.
+        # evaluates to 0.
         jmespath_query = '`0`'
         output = self.run_cmd('iam list-users --query %s' % jmespath_query,
                               expected_rc=0)[0]
@@ -105,7 +108,7 @@ class TestListUsers(BaseAWSCommandParamsTest):
     def test_json_prints_unicode_chars(self):
         self.parsed_response['Users'][1]['UserId'] = u'\u2713'
         output = self.run_cmd('iam list-users', expected_rc=0)[0]
-        with mock.patch('sys.stdout', six.StringIO()) as f:
+        with mock.patch('sys.stdout', StringIO()) as f:
             out = get_stdout_text_writer()
             out.write(u'\u2713')
             expected = f.getvalue()
@@ -120,11 +123,34 @@ class TestFormattersHandleClosedPipes(unittest.TestCase):
         args = mock.Mock(query=None)
         operation = mock.Mock(can_paginate=False)
         response = '{"Foo": "Bar"}'
-        fake_closed_stream = mock.Mock(spec=six.StringIO)
+        fake_closed_stream = mock.Mock(spec=StringIO)
         fake_closed_stream.flush.side_effect = IOError
         formatter = JSONFormatter(args)
         formatter('command_name', response, stream=fake_closed_stream)
-        # We should not have let the IOError propogate, but
+        # We should not have let the IOError propagate, but
         # we still should have called the flush() on the
         # stream.
         fake_closed_stream.flush.assert_called_with()
+
+
+class TestBinaryData(unittest.TestCase):
+    def test_binary_data_gets_base64_encoded(self):
+        args = mock.Mock(query=None)
+        raw_bytes = b'foo'
+        response = {'BinaryValue': raw_bytes}
+        stdout_b = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_b, newline='\n')
+        formatter = JSONFormatter(args)
+
+        with contextlib.redirect_stdout(stdout):
+            formatter('command-name', response, sys.stdout)
+            stdout.flush()
+
+        assert (
+            stdout_b.getvalue()
+            == (
+                '{\n'
+                f'    "BinaryValue": "{base64.b64encode(raw_bytes).decode("utf-8")}"\n'
+                '}\n'
+            ).encode()
+        )

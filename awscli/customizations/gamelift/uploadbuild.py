@@ -21,6 +21,20 @@ from s3transfer import S3Transfer
 
 from awscli.customizations.commands import BasicCommand
 from awscli.customizations.s3.utils import human_readable_size
+from awscli.utils import create_nested_client
+
+
+def parse_tags(raw_tags_list):
+    """Parse tags from Key=Value format to GameLift API format."""
+    tags_list = []
+    if raw_tags_list:
+        for tag in raw_tags_list:
+            if '=' in tag:
+                key, value = tag.split('=', 1)
+            else:
+                key, value = tag, ''
+            tags_list.append({'Key': key, 'Value': value})
+    return tags_list
 
 
 class UploadBuildCommand(BasicCommand):
@@ -34,22 +48,27 @@ class UploadBuildCommand(BasicCommand):
         {'name': 'build-root', 'required': True,
          'help_text':
          'The path to the directory containing the build to upload'},
+        {'name': 'server-sdk-version', 'required': False,
+         'help_text':
+             'The version of the GameLift server SDK used to '
+             'create the game server'},
         {'name': 'operating-system', 'required': False,
-         'help_text': 'The operating system the build runs on'}
+         'help_text': 'The operating system the build runs on'},
+         {'name': 'tags', 'required': False, 'nargs': '+',
+         'help_text': 'Tags to assign to the build. Format: Key=Value'}
     ]
 
     def _run_main(self, args, parsed_globals):
-        gamelift_client = self._session.create_client(
-            'gamelift', region_name=parsed_globals.region,
+        gamelift_client = create_nested_client(
+            self._session, 'gamelift', region_name=parsed_globals.region,
             endpoint_url=parsed_globals.endpoint_url,
             verify=parsed_globals.verify_ssl
         )
         # Validate a build directory
         if not validate_directory(args.build_root):
             sys.stderr.write(
-                'Fail to upload %s. '
+                f'Fail to upload {args.build_root}. '
                 'The build root directory is empty or does not exist.\n'
-                % (args.build_root)
             )
 
             return 255
@@ -60,7 +79,10 @@ class UploadBuildCommand(BasicCommand):
         }
         if args.operating_system:
             create_build_kwargs['OperatingSystem'] = args.operating_system
-
+        if args.server_sdk_version:
+            create_build_kwargs['ServerSdkVersion'] = args.server_sdk_version
+        if args.tags:
+            create_build_kwargs['Tags'] = parse_tags(args.tags)
         response = gamelift_client.create_build(**create_build_kwargs)
         build_id = response['Build']['BuildId']
 
@@ -76,8 +98,9 @@ class UploadBuildCommand(BasicCommand):
         access_key = upload_credentials['AccessKeyId']
         secret_key = upload_credentials['SecretAccessKey']
         session_token = upload_credentials['SessionToken']
-        s3_client = self._session.create_client(
-            's3', aws_access_key_id=access_key,
+        s3_client = create_nested_client(
+            self._session, 's3', 
+            aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
             aws_session_token=session_token,
             region_name=parsed_globals.region,
@@ -87,7 +110,7 @@ class UploadBuildCommand(BasicCommand):
         s3_transfer_mgr = S3Transfer(s3_client)
 
         try:
-            fd, temporary_zipfile = tempfile.mkstemp('%s.zip' % build_id)
+            fd, temporary_zipfile = tempfile.mkstemp(f'{build_id}.zip')
             zip_directory(temporary_zipfile, args.build_root)
             s3_transfer_mgr.upload_file(
                 temporary_zipfile, bucket, key,
@@ -101,8 +124,8 @@ class UploadBuildCommand(BasicCommand):
             os.remove(temporary_zipfile)
 
         sys.stdout.write(
-            'Successfully uploaded %s to AWS GameLift\n'
-            'Build ID: %s\n' % (args.build_root, build_id))
+            f'Successfully uploaded {args.build_root} to AWS GameLift\n'
+            f'Build ID: {build_id}\n')
 
         return 0
 
@@ -135,7 +158,7 @@ def validate_directory(source_root):
 
 # TODO: Remove this class once available to CLI from s3transfer
 # docstring.
-class ProgressPercentage(object):
+class ProgressPercentage:
     def __init__(self, filename, label=None):
         self._filename = filename
         self._label = label
@@ -151,9 +174,6 @@ class ProgressPercentage(object):
             if self._size > 0:
                 percentage = (self._seen_so_far / self._size) * 100
                 sys.stdout.write(
-                    "\r%s  %s / %s  (%.2f%%)" % (
-                        self._label, human_readable_size(self._seen_so_far),
-                        human_readable_size(self._size), percentage
-                    )
+                    f"\r{self._label}  {human_readable_size(self._seen_so_far)} / {human_readable_size(self._size)}  ({percentage:.2f}%)"
                 )
                 sys.stdout.flush()

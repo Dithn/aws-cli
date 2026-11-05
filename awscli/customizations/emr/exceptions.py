@@ -50,7 +50,7 @@ class EmptyListError(EmrError):
 
     :ivar param: The provided list parameter
     """
-    fmt = ('aws: error: The prameter {param} cannot be an empty list.')
+    fmt = ('aws: error: The parameter {param} cannot be an empty list.')
 
 
 class MissingRequiredInstanceGroupsError(EmrError):
@@ -259,12 +259,14 @@ class MissingClusterAttributesError(EmrError):
     """
     In the modify-cluster-attributes command, customers need to provide
     at least one of the following cluster attributes: --visible-to-all-users,
-    --no-visible-to-all-users, --termination-protected
-    and --no-termination-protected
+    --no-visible-to-all-users, --termination-protected, --no-termination-protected,
+    --auto-terminate and --no-auto-terminate
     """
     fmt = ('aws: error: Must specify one of the following boolean options: '
            '--visible-to-all-users|--no-visible-to-all-users, '
-           '--termination-protected|--no-termination-protected.')
+           '--termination-protected|--no-termination-protected, '
+           '--auto-terminate|--no-auto-terminate, '
+           '--unhealthy-node-replacement|--no-unhealthy-node-replacement.')
 
 
 class InvalidEmrFsArgumentsError(EmrError):
@@ -339,4 +341,49 @@ class MissingAutoScalingRoleError(EmrError):
 
     fmt = ("aws: error: Must specify --auto-scaling-role when configuring an "
            "AutoScaling policy for an instance group.")
+
+
+class InvalidS3LoggingLogTypeError(EmrError):
+    """
+    Invalid log type specified for S3LoggingConfiguration.
+    """
+    fmt = ('aws: error: Invalid log type specified for the current '
+           'S3LoggingConfiguration. Supported log types: system-logs, '
+           'application-logs, persistent-ui-logs')
+
+
+class InvalidS3LoggingPolicyError(EmrError):
+    """
+    Invalid policy specified for S3LoggingConfiguration.
+    """
+    fmt = ('aws: error: Invalid policy specified for the current '
+           'S3LoggingConfiguration. Supported policies: emr-managed, '
+           'on-customer-s3only, disabled')
+
+
+class InvalidS3LoggingPersistentUiLogsPolicyError(EmrError):
+    """
+    Invalid policy for persistent-ui-logs in S3LoggingConfiguration.
+    """
+    fmt = ("aws: error: Invalid policy for log type 'persistent-ui-logs'. "
+           "Supported values for persistent-ui-logs: emr-managed, disabled")
+
+
+class S3LoggingConfigurationLogUriRequiredError(EmrError):
+    """
+    LogUri is required for the current S3LoggingConfiguration.
+    """
+    fmt = ('aws: error: A valid S3 location (LogUri) is required for the '
+           'current S3LoggingConfiguration. Please specify an S3 bucket and '
+           'try again.')
+
+
+class S3LoggingConfigurationLogUriNotAllowedError(EmrError):
+    """
+    LogUri must not be specified when system-logs and application-logs
+    policies are both disabled in S3LoggingConfiguration.
+    """
+    fmt = ('aws: error: LogUri must not be specified when system-logs and '
+           'application-logs policies are both disabled in '
+           'S3LoggingConfiguration')
 

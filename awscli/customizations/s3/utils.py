@@ -32,7 +32,7 @@ HUMANIZE_SUFFIXES = ('KiB', 'MiB', 'GiB', 'TiB', 'PiB', 'EiB')
 EPOCH_TIME = datetime(1970, 1, 1, tzinfo=tzutc())
 # Maximum object size allowed in S3.
 # See: http://docs.aws.amazon.com/AmazonS3/latest/dev/qfacts.html
-MAX_UPLOAD_SIZE = 5 * (1024 ** 4)
+MAX_UPLOAD_SIZE = 5 * (1024 ** 3) * 10000
 SIZE_SUFFIX = {
     'kb': 1024,
     'mb': 1024 ** 2,
@@ -62,6 +62,10 @@ _S3_OBJECT_LAMBDA_TO_BUCKET_KEY_REGEX = re.compile(
     r'^(?P<bucket>arn:(aws).*:s3-object-lambda:[a-z\-0-9]+:[0-9]{12}:'
     r'accesspoint[/:][a-zA-Z0-9\-]{1,63})[/:]?(?P<key>.*)$'
 )
+
+
+def is_account_regional_namespace_bucket(bucket):
+    return bucket.endswith('-an')
 
 
 def human_readable_size(value):
@@ -134,7 +138,7 @@ class AppendFilter(argparse.Action):
     --exclude and the value will be the rule to apply.  This will
     format all of the rules inputted into the command line
     in a way compatible with the Filter class.  Note that rules that
-    appear later in the command line take preferance over rulers that
+    appear later in the command line take preference over rulers that
     appear earlier.
     """
     def __call__(self, parser, namespace, values, option_string=None):
@@ -338,9 +342,9 @@ def guess_content_type(filename):
     """
     try:
         return mimetypes.guess_type(filename)[0]
-    # This catches a bug in the mimetype libary where some MIME types
+    # This catches a bug in the mimetype library where some MIME types
     # specifically on windows machines cause a UnicodeDecodeError
-    # because the MIME type in the Windows registery has an encoding
+    # because the MIME type in the Windows registry has an encoding
     # that cannot be properly encoded using the default system encoding.
     # https://bugs.python.org/issue9291
     #
@@ -463,7 +467,7 @@ class RequestParamsMapper(object):
         >>> print(request_params)
         {'StorageClass': 'GLACIER', 'ServerSideEncryption': 'AES256'}
 
-    Note that existing parameters in ``request_params`` will be overriden if
+    Note that existing parameters in ``request_params`` will be overridden if
     a parameter in ``cli_params`` maps to the existing parameter.
     """
     @classmethod
@@ -474,12 +478,14 @@ class RequestParamsMapper(object):
         cls._set_sse_request_params(request_params, cli_params)
         cls._set_sse_c_request_params(request_params, cli_params)
         cls._set_request_payer_param(request_params, cli_params)
+        cls._set_checksum_algorithm_param(request_params, cli_params)
 
     @classmethod
     def map_get_object_params(cls, request_params, cli_params):
         """Map CLI params to GetObject request params"""
         cls._set_sse_c_request_params(request_params, cli_params)
         cls._set_request_payer_param(request_params, cli_params)
+        cls._set_checksum_mode_param(request_params, cli_params)
 
     @classmethod
     def map_copy_object_params(cls, request_params, cli_params):
@@ -492,11 +498,25 @@ class RequestParamsMapper(object):
         cls._set_sse_c_and_copy_source_request_params(
             request_params, cli_params)
         cls._set_request_payer_param(request_params, cli_params)
+        cls._set_checksum_algorithm_param(request_params, cli_params)
 
     @classmethod
     def map_head_object_params(cls, request_params, cli_params):
         """Map CLI params to HeadObject request params"""
         cls._set_sse_c_request_params(request_params, cli_params)
+        cls._set_request_payer_param(request_params, cli_params)
+
+    @classmethod
+    def map_head_object_params_with_copy_source_sse(
+            cls, request_params, cli_params
+    ):
+        """
+        Map CLI params to HeadObject request params,
+        using the SSE-C headers from the copy source
+        """
+        cls._set_sse_c_request_params_with_copy_source_sse(
+            request_params, cli_params
+        )
         cls._set_request_payer_param(request_params, cli_params)
 
     @classmethod
@@ -533,6 +553,16 @@ class RequestParamsMapper(object):
     def _set_request_payer_param(cls, request_params, cli_params):
         if cli_params.get('request_payer'):
             request_params['RequestPayer'] = cli_params['request_payer']
+
+    @classmethod
+    def _set_checksum_mode_param(cls, request_params, cli_params):
+        if cli_params.get('checksum_mode'):
+            request_params['ChecksumMode'] = cli_params['checksum_mode']
+
+    @classmethod
+    def _set_checksum_algorithm_param(cls, request_params, cli_params):
+        if cli_params.get('checksum_algorithm'):
+            request_params['ChecksumAlgorithm'] = cli_params['checksum_algorithm']
 
     @classmethod
     def _set_general_object_params(cls, request_params, cli_params):
@@ -611,6 +641,18 @@ class RequestParamsMapper(object):
             request_params['SSECustomerKey'] = cli_params['sse_c_key']
 
     @classmethod
+    def _set_sse_c_request_params_with_copy_source_sse(
+        cls, request_params, cli_params
+    ):
+        if cli_params.get('sse_c_copy_source'):
+            request_params['SSECustomerAlgorithm'] = cli_params[
+                'sse_c_copy_source'
+            ]
+            request_params['SSECustomerKey'] = cli_params[
+                'sse_c_copy_source_key'
+            ]
+
+    @classmethod
     def _set_sse_c_copy_source_request_params(cls, request_params, cli_params):
         if cli_params.get('sse_c_copy_source'):
             request_params['CopySourceSSECustomerAlgorithm'] = cli_params[
@@ -636,6 +678,17 @@ class ProvideSizeSubscriber(BaseSubscriber):
         future.meta.provide_transfer_size(self.size)
 
 
+class ProvideETagSubscriber(BaseSubscriber):
+    """
+    A subscriber which provides the object ETag before it's queued.
+    """
+    def __init__(self, etag):
+        self.etag = etag
+
+    def on_queued(self, future, **kwargs):
+        future.meta.provide_object_etag(self.etag)
+
+
 # TODO: Eventually port this down to the BaseSubscriber or a new subscriber
 # class in s3transfer. The functionality is very convenient but may need
 # some further design decisions to make it a feature in s3transfer.
@@ -652,7 +705,7 @@ class OnDoneFilteredSubscriber(BaseSubscriber):
             future.result()
         except Exception as e:
             future_exception = e
-        # If the result propogates an error, call the on_failure
+        # If the result propagates an error, call the on_failure
         # method instead.
         if future_exception:
             self._on_failure(future, future_exception)
@@ -664,6 +717,20 @@ class OnDoneFilteredSubscriber(BaseSubscriber):
 
     def _on_failure(self, future, e):
         pass
+
+
+class CaseConflictCleanupSubscriber(BaseSubscriber):
+    """
+    A subscriber which removes object compare key from case conflict set
+    when download finishes.
+    """
+
+    def __init__(self, submitted, case_conflict_key):
+        self._submitted = submitted
+        self._key = case_conflict_key
+
+    def on_done(self, future, **kwargs):
+        self._submitted.discard(self._key)
 
 
 class DeleteSourceSubscriber(OnDoneFilteredSubscriber):
@@ -796,3 +863,114 @@ class NonSeekableStream(object):
             return self._fileobj.read()
         else:
             return self._fileobj.read(amt)
+
+
+class S3PathResolver:
+    _S3_ACCESSPOINT_ARN_TO_ACCOUNT_NAME_REGEX = re.compile(
+        r'^arn:aws.*:s3:[a-z0-9\-]+:(?P<account>[0-9]{12}):accesspoint[:/]'
+        r'(?P<name>[a-z0-9\-]{3,50})$'
+    )
+    _S3_OUTPOST_ACCESSPOINT_ARN_TO_ACCOUNT_REGEX = re.compile(
+        r'^arn:aws.*:s3-outposts:[a-z0-9\-]+:(?P<account>[0-9]{12}):outpost/'
+        r'op-[a-zA-Z0-9]+/accesspoint[:/][a-z0-9\-]{3,50}$'
+    )
+    _S3_MRAP_ARN_TO_ACCOUNT_ALIAS_REGEX = re.compile(
+        r'^arn:aws:s3::(?P<account>[0-9]{12}):accesspoint[:/]'
+        r'(?P<alias>[a-zA-Z0-9]+\.mrap)$'
+    )
+
+    def __init__(self, s3control_client, sts_client):
+        self._s3control_client = s3control_client
+        self._sts_client = sts_client
+
+    @classmethod
+    def has_underlying_s3_path(self, path):
+        bucket, _ = split_s3_bucket_key(path)
+        return bool(
+            self._S3_ACCESSPOINT_ARN_TO_ACCOUNT_NAME_REGEX.match(bucket) or
+            self._S3_OUTPOST_ACCESSPOINT_ARN_TO_ACCOUNT_REGEX.match(bucket) or
+            self._S3_MRAP_ARN_TO_ACCOUNT_ALIAS_REGEX.match(bucket) or
+            bucket.endswith('-s3alias') or bucket.endswith('--op-s3'))
+
+    @classmethod
+    def from_session(cls, session, region, verify_ssl):
+        s3control_client = session.create_client(
+            's3control',
+            region_name=region,
+            verify=verify_ssl,
+        )
+        sts_client = session.create_client(
+            'sts',
+            verify=verify_ssl,
+        )
+        return cls(s3control_client, sts_client)
+
+    def resolve_underlying_s3_paths(self, path):
+        bucket, key = split_s3_bucket_key(path)
+        match = self._S3_ACCESSPOINT_ARN_TO_ACCOUNT_NAME_REGEX.match(bucket)
+        if match:
+            return self._resolve_accesspoint_arn(
+                match.group('account'), match.group('name'), key
+            )
+        match = self._S3_OUTPOST_ACCESSPOINT_ARN_TO_ACCOUNT_REGEX.match(bucket)
+        if match:
+            return self._resolve_accesspoint_arn(
+                match.group('account'), bucket, key
+            )
+        match = self._S3_MRAP_ARN_TO_ACCOUNT_ALIAS_REGEX.match(bucket)
+        if match:
+            return self._resolve_mrap_alias(
+                match.group('account'), match.group('alias'), key
+            )
+        if bucket.endswith('-s3alias'):
+            return self._resolve_accesspoint_alias(bucket, key)
+        if bucket.endswith('--op-s3'):
+            raise ValueError(
+                "Can't resolve underlying bucket name of s3 outposts "
+                "access point alias. Use arn instead to resolve the "
+                "bucket name and validate the mv command."
+            )
+        return [path]
+
+    def _resolve_accesspoint_arn(self, account, name, key):
+        bucket = self._get_access_point_bucket(account, name)
+        return [f"s3://{bucket}/{key}"]
+
+    def _resolve_accesspoint_alias(self, alias, key):
+        account = self._get_account_id()
+        bucket = self._get_access_point_bucket(account, alias)
+        return [f"s3://{bucket}/{key}"]
+
+    def _resolve_mrap_alias(self, account, alias, key):
+        buckets = self._get_mrap_buckets(account, alias)
+        return [f"s3://{bucket}/{key}" for bucket in buckets]
+
+    def _get_access_point_bucket(self, account, name):
+        return self._s3control_client.get_access_point(
+            AccountId=account,
+            Name=name
+        )['Bucket']
+
+    def _get_account_id(self):
+        return self._sts_client.get_caller_identity()['Account']
+
+    def _get_mrap_buckets(self, account, alias):
+        next_token = None
+        while True:
+            args = {"AccountId": account}
+            if next_token:
+                args['NextToken'] = next_token
+            response = self._s3control_client.list_multi_region_access_points(
+                **args
+            )
+            for access_point in response['AccessPoints']:
+                if access_point['Alias'] == alias:
+                    return [
+                        region["Bucket"] for region in access_point["Regions"]
+                    ]
+            next_token = response.get('NextToken')
+            if not next_token:
+                raise ValueError(
+                    "Couldn't find multi-region access point "
+                    f"with alias {alias} in account {account}"
+                )

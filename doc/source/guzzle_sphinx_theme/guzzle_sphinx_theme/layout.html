@@ -10,7 +10,6 @@
 {%- block htmltitle %}
   {{ super() }}
   <link rel="stylesheet" type="text/css" href="{{ pathto('_static/bootstrap.min.css', 1) }}" />
-  <script type="text/javascript" src="{{ pathto('_static/jquery-1.9.1.min.js', 1)}}"></script>
   <script src="/SdkStatic/sdk-priv.js" async="true"></script>
 {%- endblock %}
 
@@ -64,7 +63,8 @@
         {%- if theme_github_user and theme_github_repo %}
         <div class="pull-right" id="github-stars">
           <iframe src="https://ghbtns.com/github-btn.html?user={{ theme_github_user }}&repo={{ theme_github_repo }}&type=watch&count=true&size=small"
-                  allowtransparency="true" frameborder="0" scrolling="0" width="110px" height="20px"></iframe>
+                  allowtransparency="true" frameborder="0" scrolling="0" width="110px" height="20px"  sandbox="allow-scripts"
+                  title="GitHub button showing the number of project stars."></iframe>
         </div>
         {%- endif %}
       </div>
@@ -92,23 +92,29 @@
             <div class="body">
                 <div class="well">
                     <p>
-                        <strong>Note:</strong>
+                        <h3 style="margin-top: 0px;">Note:</h3>
                         You are viewing the documentation for an older major version of the AWS CLI (version 1).
-                    </p>
-                    <p>
-                        AWS CLI version 2, the latest major version of AWS CLI, is now stable and recommended for general use.
-                        {% if pagename in deprecated_commands %}
+                         {% if pagename in deprecated_commands %}
                             {% if deprecated_commands[pagename] %}
                                 This command is deprecated in AWS CLI version 2, use
-                                <a href="https://awscli.amazonaws.com/v2/documentation/api/latest/{{ deprecated_commands[pagename][0] }}.html">{{ deprecated_commands[pagename][1] }}</a> instead.
+                                <a href="https://docs.aws.amazon.com/cli/latest/{{ deprecated_commands[pagename][0] }}.html">{{ deprecated_commands[pagename][1] }}</a> instead.
                             {% else %}
                                 This command is deprecated and no longer available in AWS CLI version 2.
                             {% endif %}
                         {% else %}
                             To view this page for the AWS CLI version 2, click
-                            <a href="https://awscli.amazonaws.com/v2/documentation/api/latest/{{ pagename }}.html">here</a>.
+                            <a href="https://docs.aws.amazon.com/cli/latest/{{ pagename }}.html">here</a>.
                         {% endif %}
-                        For more information see the AWS CLI version 2
+                    </p>
+                    <p>
+                        AWS CLI v1 entered maintenance mode on August 5, 2026 and will reach end-of-support on July 15, 2027.
+                        During maintenance mode, releases are limited to critical bug fixes and security issues.
+                        AWS CLI v1 will not receive API updates for new or existing services, or be updated to support new regions.
+                        For more information, see the
+                        <a href="https://aws.amazon.com/blogs/developer/cli-v1-maintenance-mode-announcement/">maintenance mode announcement</a>.
+                    </p>
+                    <p>
+                        We recommend that you migrate to AWS CLI version 2. See the
                         <a href="https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html">installation instructions</a>
                         and
                         <a href="https://docs.aws.amazon.com/cli/latest/userguide/cliv2-migration.html">migration guide</a>.

@@ -13,15 +13,17 @@
 import json
 
 from botocore.model import ShapeResolver, StructureShape, StringShape, \
-    ListShape, MapShape
+    ListShape, MapShape, Shape, DenormalizedStructureBuilder
 
 from awscli.testutils import mock, unittest, FileCreator
 from awscli.clidocs import OperationDocumentEventHandler, \
     CLIDocumentEventHandler, TopicListerDocumentEventHandler, \
-    TopicDocumentEventHandler
+    TopicDocumentEventHandler, GlobalOptionsDocumenter, \
+    ServiceDocumentEventHandler
 from awscli.bcdoc.restdoc import ReSTDocument
 from awscli.help import ServiceHelpCommand, TopicListerCommand, \
-    TopicHelpCommand
+    TopicHelpCommand, HelpCommand
+from awscli.arguments import CustomArgument
 
 
 class TestRecursiveShapes(unittest.TestCase):
@@ -149,6 +151,15 @@ class TestCLIDocumentEventHandler(unittest.TestCase):
         help_command.obj = operation_model
         return help_command
 
+    def create_tagged_union_shape(self):
+        shape_model = {
+            'type': 'structure',
+            'union': True,
+            'members': {}
+        }
+        tagged_union = StructureShape('tagged_union', shape_model)
+        return tagged_union
+
     def get_help_docs_for_argument(self, shape):
         arg_table = {'arg-name': mock.Mock(argument_model=shape)}
         help_command = mock.Mock()
@@ -185,7 +196,7 @@ class TestCLIDocumentEventHandler(unittest.TestCase):
         doc_handler.doc_breadcrumbs(help_cmd)
         self.assertEqual(
             help_cmd.doc.getvalue().decode('utf-8'),
-            '[ :ref:`aws <cli:aws>` ]'
+            '[ :ref:`aws <cli:aws>` ]\n\n'
         )
 
     def test_breadcrumbs_service_command_html(self):
@@ -198,7 +209,7 @@ class TestCLIDocumentEventHandler(unittest.TestCase):
         doc_handler.doc_breadcrumbs(help_cmd)
         self.assertEqual(
             help_cmd.doc.getvalue().decode('utf-8'),
-            '[ :ref:`aws <cli:aws>` ]'
+            '[ :ref:`aws <cli:aws>` ]\n\n'
         )
 
     def test_breadcrumbs_operation_command_html(self):
@@ -211,7 +222,7 @@ class TestCLIDocumentEventHandler(unittest.TestCase):
         doc_handler.doc_breadcrumbs(help_cmd)
         self.assertEqual(
             help_cmd.doc.getvalue().decode('utf-8'),
-            '[ :ref:`aws <cli:aws>` . :ref:`ec2 <cli:aws ec2>` ]'
+            '[ :ref:`aws <cli:aws>` . :ref:`ec2 <cli:aws ec2>` ]\n\n'
         )
 
     def test_breadcrumbs_wait_command_html(self):
@@ -225,7 +236,7 @@ class TestCLIDocumentEventHandler(unittest.TestCase):
         self.assertEqual(
             help_cmd.doc.getvalue().decode('utf-8'),
             ('[ :ref:`aws <cli:aws>` . :ref:`s3api <cli:aws s3api>`'
-             ' . :ref:`wait <cli:aws s3api wait>` ]')
+             ' . :ref:`wait <cli:aws s3api wait>` ]\n\n')
         )
 
     def test_documents_json_header_shape(self):
@@ -358,53 +369,107 @@ class TestCLIDocumentEventHandler(unittest.TestCase):
         operation_handler = OperationDocumentEventHandler(help_command)
         operation_handler.doc_description(help_command=help_command)
         rendered = help_command.doc.getvalue().decode('utf-8')
-        # Should expect an externa link because we're generating html.
+        # Should expect an external link because we're generating html.
         self.assertIn(
             'See also: `AWS API Documentation '
             '<https://docs.aws.amazon.com/goto/'
             'WebAPI/service-1-2-3/myoperation>`_', rendered)
 
-    def test_includes_global_args_ref_in_man_description(self):
+    def test_includes_streaming_blob_options(self):
         help_command = self.create_help_command()
+        blob_shape = Shape('blob_shape', {'type': 'blob'})
+        blob_shape.serialization = {'streaming': True}
+        blob_arg = CustomArgument('blob_arg', argument_model=blob_shape)
+        help_command.arg_table = {'blob_arg': blob_arg}
         operation_handler = OperationDocumentEventHandler(help_command)
-        operation_handler.doc_description(help_command=help_command)
+        operation_handler.doc_option(arg_name='blob_arg',
+                                     help_command=help_command)
         rendered = help_command.doc.getvalue().decode('utf-8')
-        # The links aren't generated in the "man" mode.
-        self.assertIn(
-            "See 'aws help' for descriptions of global parameters", rendered
-        )
+        self.assertIn('streaming blob', rendered)
 
-    def test_includes_global_args_ref_in_html_description(self):
+    def test_streaming_blob_comes_after_docstring(self):
         help_command = self.create_help_command()
-        help_command.doc.target = 'html'
+        blob_shape = Shape('blob_shape', {'type': 'blob'})
+        blob_shape.serialization = {'streaming': True}
+        blob_arg = CustomArgument(name='blob_arg',
+                                  argument_model=blob_shape,
+                                  help_text='FooBar')
+        help_command.arg_table = {'blob_arg': blob_arg}
         operation_handler = OperationDocumentEventHandler(help_command)
-        operation_handler.doc_description(help_command=help_command)
+        operation_handler.doc_option(arg_name='blob_arg',
+                                     help_command=help_command)
         rendered = help_command.doc.getvalue().decode('utf-8')
-        self.assertIn(
-            "See :doc:`'aws help' </reference/index>` for descriptions of "
-            "global parameters", rendered
-        )
+        self.assertRegex(rendered, r'FooBar[\s\S]*streaming blob')
 
-    def test_includes_global_args_ref_in_man_options(self):
+    def test_includes_tagged_union_options(self):
         help_command = self.create_help_command()
+        tagged_union = self.create_tagged_union_shape()
+        arg = CustomArgument(name='tagged_union',
+                             argument_model=tagged_union)
+        help_command.arg_table = {'tagged_union': arg}
         operation_handler = OperationDocumentEventHandler(help_command)
-        operation_handler.doc_options_end(help_command=help_command)
+        operation_handler.doc_option(arg_name='tagged_union',
+                                     help_command=help_command)
         rendered = help_command.doc.getvalue().decode('utf-8')
-        # The links aren't generated in the "man" mode.
-        self.assertIn(
-            "See 'aws help' for descriptions of global parameters", rendered
-        )
+        self.assertIn('(tagged union structure)', rendered)
 
-    def test_includes_global_args_ref_in_html_options(self):
+    def test_tagged_union_comes_after_docstring_options(self):
         help_command = self.create_help_command()
-        help_command.doc.target = 'html'
+        tagged_union = self.create_tagged_union_shape()
+        arg = CustomArgument(name='tagged_union',
+                             argument_model=tagged_union,
+                             help_text='FooBar')
+        help_command.arg_table = {'tagged_union': arg}
         operation_handler = OperationDocumentEventHandler(help_command)
-        operation_handler.doc_options_end(help_command=help_command)
+        operation_handler.doc_option(arg_name='tagged_union',
+                                     help_command=help_command)
         rendered = help_command.doc.getvalue().decode('utf-8')
-        self.assertIn(
-            "See :doc:`'aws help' </reference/index>` for descriptions of "
-            "global parameters", rendered
+        self.assertRegex(rendered, r'FooBar[\s\S]*Tagged Union')
+
+    def test_tagged_union_comes_after_docstring_output(self):
+        help_command = self.create_help_command()
+        tagged_union = self.create_tagged_union_shape()
+        tagged_union.documentation = "FooBar"
+        shape = DenormalizedStructureBuilder().with_members({
+            'foo': {
+                'type': 'structure',
+                'union': True,
+                'documentation': 'FooBar',
+                'members': {}
+            }
+        }).build_model()
+        help_command.obj.output_shape = shape
+        operation_handler = OperationDocumentEventHandler(help_command)
+        operation_handler.doc_output(help_command=help_command,
+                                     event_name='foobar')
+        rendered = help_command.doc.getvalue().decode('utf-8')
+        self.assertRegex(rendered, r'FooBar[\s\S]*Tagged Union')
+
+    def test_meta_description_operation_command_html(self):
+        help_cmd = ServiceHelpCommand(
+            self.session, self.obj, self.command_table, self.arg_table,
+            self.name, 'ec2.run-instances'
         )
+        help_cmd.doc.target = 'html'
+        doc_handler = OperationDocumentEventHandler(help_cmd)
+        doc_handler.doc_meta_description(help_cmd)
+
+        meta_description = help_cmd.doc.getvalue().decode('utf-8')
+        self.assertIn(".. meta::\n   :description: ", meta_description)
+        self.assertIn('to run the ec2 run-instances command', meta_description)
+
+    def test_meta_description_service_html(self):
+        help_cmd = ServiceHelpCommand(
+            self.session, self.obj, self.command_table, self.arg_table,
+            self.name, 'ec2'
+        )
+        help_cmd.doc.target = 'html'
+        doc_handler = ServiceDocumentEventHandler(help_cmd)
+        doc_handler.doc_meta_description(help_cmd)
+
+        meta_description = help_cmd.doc.getvalue().decode('utf-8')
+        self.assertIn(".. meta::\n   :description: Learn about the AWS CLI ", meta_description)
+        self.assertIn(' ec2 commands', meta_description)
 
 
 class TestTopicDocumentEventHandlerBase(unittest.TestCase):
@@ -613,3 +678,48 @@ class TestTopicDocumentEventHandler(TestTopicDocumentEventHandlerBase):
         self.doc_handler.doc_description(self.cmd)
         contents = self.cmd.doc.getvalue().decode('utf-8')
         self.assertIn(ref_body, contents)
+
+    def test_excludes_global_options(self):
+        self.doc_handler.doc_global_option(self.cmd)
+        global_options = self.cmd.doc.getvalue().decode('utf-8')
+        self.assertNotIn('Global Options', global_options)
+
+
+class TestGlobalOptionsDocumenter(unittest.TestCase):
+    def create_help_command(self):
+        types = ['blob', 'integer', 'boolean', 'string']
+        arg_table = {}
+        for t in types:
+            name = f'{t}_type'
+            help_text = f'This arg type is {t}'
+            choices = ['A', 'B', 'C'] if t == 'string' else []
+            arg_table[name] = CustomArgument(name=name,
+                                             cli_type_name=t,
+                                             help_text=help_text,
+                                             choices=choices)
+        help_command = mock.Mock(spec=HelpCommand)
+        help_command.arg_table = arg_table
+        help_command.doc = ReSTDocument()
+        return help_command
+
+    def create_documenter(self):
+        return GlobalOptionsDocumenter(self.create_help_command())
+
+    def test_doc_global_options(self):
+        documenter = self.create_documenter()
+        options = documenter.doc_global_options()
+        self.assertIn('``--string_type`` (string)', options)
+        self.assertIn('``--integer_type`` (integer)', options)
+        self.assertIn('``--boolean_type`` (boolean)', options)
+        self.assertIn('``--blob_type`` (blob)', options)
+        self.assertIn('*   A', options)
+        self.assertIn('*   B', options)
+        self.assertIn('*   C', options)
+
+    def test_doc_global_synopsis(self):
+        documenter = self.create_documenter()
+        synopsis = documenter.doc_global_synopsis()
+        self.assertIn('[--string_type <value>]', synopsis)
+        self.assertIn('[--integer_type <value>]', synopsis)
+        self.assertIn('[--boolean_type]', synopsis)
+        self.assertIn('[--blob_type <value>]', synopsis)

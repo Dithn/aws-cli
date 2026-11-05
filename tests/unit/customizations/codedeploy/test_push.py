@@ -8,18 +8,17 @@
 #
 # or in the "license" file accompanying this file. This file is
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
-# mock.ANY KIND, either express or implied. See the License for the specific
+# ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 
 import awscli
 
 from argparse import Namespace
-from six import StringIO
 from botocore.exceptions import ClientError
 
 from awscli.customizations.codedeploy.push import Push
 from awscli.testutils import mock, unittest
-from awscli.compat import ZIP_COMPRESSION_MODE
+from awscli.compat import StringIO, ZIP_COMPRESSION_MODE
 
 
 class TestPush(unittest.TestCase):
@@ -140,7 +139,7 @@ class TestPush(unittest.TestCase):
     def test_validate_args_default_description(self):
         self.args.description = None
         self.push._validate_args(self.args)
-        self.assertRegexpMatches(
+        self.assertRegex(
             self.args.description,
             'Uploaded by AWS CLI .* UTC'
         )

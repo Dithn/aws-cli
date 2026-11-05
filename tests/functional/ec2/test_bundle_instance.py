@@ -14,11 +14,9 @@
 import base64
 import datetime
 
-from six.moves import cStringIO
-
 import awscli.customizations.ec2.bundleinstance
-from awscli.compat import six
 from awscli.testutils import mock, BaseAWSCommandParamsTest
+from awscli.compat import StringIO
 
 
 class TestBundleInstance(BaseAWSCommandParamsTest):
@@ -33,7 +31,7 @@ class TestBundleInstance(BaseAWSCommandParamsTest):
 
     def setUp(self):
         super(TestBundleInstance, self).setUp()
-        # This mocks out datetime.datetime.utcnow() so that it always
+        # This mocks out datetime.datetime.now() so that it always
         # returns the same datetime object.  This is because this value
         # is embedded into the policy file that is generated and we
         # don't what the policy or its signature to change each time
@@ -43,7 +41,7 @@ class TestBundleInstance(BaseAWSCommandParamsTest):
             mock.Mock(wraps=datetime.datetime)
         )
         mocked_datetime = self.datetime_patcher.start()
-        mocked_datetime.utcnow.return_value = datetime.datetime(2013, 8, 9)
+        mocked_datetime.now.return_value = datetime.datetime(2013, 8, 9)
 
     def tearDown(self):
         super(TestBundleInstance, self).tearDown()
@@ -69,7 +67,7 @@ class TestBundleInstance(BaseAWSCommandParamsTest):
 
     def test_policy_provided(self):
         policy = '{"notarealpolicy":true}'
-        base64policy = base64.encodestring(six.b(policy)).strip().decode('utf-8')
+        base64policy = base64.encodebytes(policy.encode('latin-1')).strip().decode('utf-8')
         policy_signature = 'a5SmoLOxoM0MHpOdC25nE7KIafg='
         args = ' --instance-id i-12345678 --owner-akid AKIAIOSFODNN7EXAMPLE'
         args += ' --owner-sak wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
@@ -88,7 +86,7 @@ class TestBundleInstance(BaseAWSCommandParamsTest):
         self.assert_params_for_cmd(args_list, result)
 
     def test_both(self):
-        captured = cStringIO()
+        captured = StringIO()
         json = """{"S3":{"Bucket":"foobar","Prefix":"fiebaz"}}"""
         args = ' --instance-id i-12345678 --owner-aki blah --owner-sak blah --storage %s' % json
         args_list = (self.prefix + args).split()

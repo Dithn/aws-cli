@@ -46,8 +46,8 @@ from awscli.customizations.s3.utils import NonSeekableStream
 from awscli.customizations.s3.utils import StdoutBytesWriter
 from awscli.customizations.s3.utils import WarningResult
 from awscli.customizations.s3.utils import ProvideSizeSubscriber
+from awscli.customizations.s3.utils import ProvideETagSubscriber
 from awscli.customizations.s3.utils import ProvideUploadContentTypeSubscriber
-from awscli.customizations.s3.utils import ProvideCopyContentTypeSubscriber
 from awscli.customizations.s3.utils import ProvideLastModifiedTimeSubscriber
 from awscli.customizations.s3.utils import DirectoryCreatorSubscriber
 from awscli.customizations.s3.utils import DeleteSourceFileSubscriber
@@ -442,6 +442,7 @@ class TestDownloadRequestSubmitter(BaseTransferRequestSubmitterTest):
         # Make sure the subscriber applied are of the correct type and order
         ref_subscribers = [
             ProvideSizeSubscriber,
+            ProvideETagSubscriber,
             DirectoryCreatorSubscriber,
             ProvideLastModifiedTimeSubscriber,
             DownloadResultSubscriber
@@ -559,6 +560,27 @@ class TestDownloadRequestSubmitter(BaseTransferRequestSubmitterTest):
         future = self.transfer_request_submitter.submit(fileinfo)
         self.assertIsInstance(self.result_queue.get(), DryRunResult)
 
+    def test_warn_and_ignore_on_leading_slash_parent_reference(self):
+        fileinfo = self.create_file_info('/../foo.txt')
+        future = self.transfer_request_submitter.submit(fileinfo)
+        warning_result = self.result_queue.get()
+        self.assertIsInstance(warning_result, WarningResult)
+        self.assert_no_downloads_happened()
+
+    def test_warn_and_ignore_on_leading_slash_stacked_parent_reference(self):
+        fileinfo = self.create_file_info('/../../../foo/bar.txt')
+        future = self.transfer_request_submitter.submit(fileinfo)
+        warning_result = self.result_queue.get()
+        self.assertIsInstance(warning_result, WarningResult)
+        self.assert_no_downloads_happened()
+
+    def test_warn_and_ignore_on_double_leading_slash_parent_reference(self):
+        fileinfo = self.create_file_info('//../foo')
+        future = self.transfer_request_submitter.submit(fileinfo)
+        warning_result = self.result_queue.get()
+        self.assertIsInstance(warning_result, WarningResult)
+        self.assert_no_downloads_happened()
+
     def test_dry_run(self):
         self.cli_params['dryrun'] = True
         self.transfer_request_submitter = DownloadRequestSubmitter(
@@ -579,6 +601,7 @@ class TestDownloadRequestSubmitter(BaseTransferRequestSubmitterTest):
         self.transfer_request_submitter.submit(fileinfo)
         ref_subscribers = [
             ProvideSizeSubscriber,
+            ProvideETagSubscriber,
             DirectoryCreatorSubscriber,
             ProvideLastModifiedTimeSubscriber,
             DeleteSourceObjectSubscriber,
@@ -627,7 +650,7 @@ class TestCopyRequestSubmitter(BaseTransferRequestSubmitterTest):
         # Make sure the subscriber applied are of the correct type and order
         ref_subscribers = [
             ProvideSizeSubscriber,
-            ProvideCopyContentTypeSubscriber,
+            ProvideETagSubscriber,
             CopyResultSubscriber
         ]
         actual_subscribers = copy_call_kwargs['subscribers']
@@ -660,6 +683,7 @@ class TestCopyRequestSubmitter(BaseTransferRequestSubmitterTest):
             copy_call_kwargs['extra_args'], {'ContentType': 'text/plain'})
         ref_subscribers = [
             ProvideSizeSubscriber,
+            ProvideETagSubscriber,
             CopyResultSubscriber
         ]
         actual_subscribers = copy_call_kwargs['subscribers']
@@ -677,6 +701,7 @@ class TestCopyRequestSubmitter(BaseTransferRequestSubmitterTest):
         copy_call_kwargs = self.transfer_manager.copy.call_args[1]
         ref_subscribers = [
             ProvideSizeSubscriber,
+            ProvideETagSubscriber,
             CopyResultSubscriber
         ]
         actual_subscribers = copy_call_kwargs['subscribers']
@@ -794,7 +819,7 @@ class TestCopyRequestSubmitter(BaseTransferRequestSubmitterTest):
         self.transfer_request_submitter.submit(fileinfo)
         ref_subscribers = [
             ProvideSizeSubscriber,
-            ProvideCopyContentTypeSubscriber,
+            ProvideETagSubscriber,
             DeleteSourceObjectSubscriber,
             CopyResultSubscriber,
         ]

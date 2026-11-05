@@ -10,7 +10,12 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-from awscli.testutils import mock, unittest
+from functools import partial
+
+import pytest
+
+from awscli.customizations.paginate import PageArgument
+from awscli.testutils import mock, unittest, capture_output
 
 from botocore.exceptions import DataNotFoundError, PaginationError
 from botocore.model import OperationModel
@@ -18,6 +23,9 @@ from awscli.help import OperationHelpCommand, OperationDocumentEventHandler
 
 from awscli.customizations import paginate
 
+@pytest.fixture
+def max_items_page_arg():
+    return PageArgument('max-items', 'documentation', int, 'MaxItems')
 
 class TestPaginateBase(unittest.TestCase):
 
@@ -58,7 +66,7 @@ class TestArgumentTableModifications(TestPaginateBase):
         self.assertTrue(argument_table['foo']._UNDOCUMENTED)
         # Also need to hide the limit key.
         self.assertTrue(argument_table['bar']._UNDOCUMENTED)
-        # We also need to inject startin-token and max-items.
+        # We also need to inject starting-token and max-items.
         self.assertIn('starting-token', argument_table)
         self.assertIn('max-items', argument_table)
         self.assertIn('page-size', argument_table)
@@ -209,6 +217,7 @@ class TestShouldEnablePagination(TestPaginateBase):
         self.parsed_args.starting_token = None
         self.parsed_args.page_size = None
         self.parsed_args.max_items = None
+        self.call_parameters = {}
 
     def test_should_not_enable_pagination(self):
         # Here the user has specified a manual pagination argument,
@@ -301,6 +310,91 @@ class TestShouldEnablePagination(TestPaginateBase):
         self.assertEqual(arg_table['foo'], mock.sentinel.ORIGINAL_ARG)
 
 
+class TestPaginateV2Debug(TestPaginateBase):
+    def setUp(self):
+        super().setUp()
+        self.parsed_globals = mock.Mock()
+        self.parsed_args = mock.Mock()
+        self.parsed_args.starting_token = None
+        self.parsed_args.page_size = None
+        self.parsed_args.max_items = None
+        self.call_parameters = {}
+
+    def _mock_emit_first_non_none_response(
+            self,
+            mock_input_json_data,
+            event_name
+    ):
+        if event_name == 'get-cli-input-json-data':
+            return mock_input_json_data
+        return None
+
+    def test_v2_debug_call_parameters(self):
+        # Here the user has specified a manual pagination argument,
+        # via CLI Input JSON and specified v2-debug, so a
+        # migration warning should be printed.
+        # From setUp(), the limit_key is 'Bar'
+        input_tokens = ['Foo', 'Bar']
+        self.parsed_globals.v2_debug = True
+        self.parsed_globals.paginate = True
+        self.session.emit_first_non_none_response.side_effect = partial(
+            self._mock_emit_first_non_none_response,
+            {'Bar': 10}
+        )
+        # Corresponds to --bar 10
+        self.call_parameters['Foo'] = None
+        self.call_parameters['Bar'] = 10
+        with capture_output() as output:
+            paginate.check_should_enable_pagination_call_parameters(
+                self.session,
+                input_tokens,
+                self.call_parameters,
+                {},
+                self.parsed_globals
+            )
+            # We should have printed the migration warning
+            # because the user specified {Bar: 10} in the input JSON
+            self.assertIn(
+                'AWS CLI v2 UPGRADE WARNING: In AWS CLI v2, if you specify '
+                'pagination parameters by using a file with the '
+                '`--cli-input-json` parameter, automatic pagination will be '
+                'turned off.',
+                output.stderr.getvalue()
+            )
+
+    def test_v2_debug_call_params_does_not_print_for_cmd_args(self):
+        # Here the user has specified a pagination argument as a command
+        # argument and specified v2-debug, so the migration warning should NOT
+        # be printed. From setUp(), the limit_key is 'Bar'
+        input_tokens = ['Foo', 'Bar']
+        self.parsed_globals.v2_debug = True
+        self.parsed_globals.paginate = True
+        self.session.emit_first_non_none_response.side_effect = partial(
+            self._mock_emit_first_non_none_response,
+            None
+        )
+        # Corresponds to --bar 10
+        self.call_parameters['Foo'] = None
+        self.call_parameters['Bar'] = 10
+        with capture_output() as output:
+            paginate.check_should_enable_pagination_call_parameters(
+                self.session,
+                input_tokens,
+                self.call_parameters,
+                {},
+                self.parsed_globals
+            )
+            # We should not have printed the warning because
+            # the user did not specify any params through CLI input JSON
+            self.assertNotIn(
+                'AWS CLI v2 UPGRADE WARNING: In AWS CLI v2, if you specify '
+                'pagination parameters by using a file with the '
+                '`--cli-input-json` parameter, automatic pagination will be '
+                'turned off.',
+                output.stderr.getvalue()
+            )
+
+
 class TestEnsurePagingParamsNotSet(TestPaginateBase):
     def setUp(self):
         super(TestEnsurePagingParamsNotSet, self).setUp()
@@ -321,3 +415,20 @@ class TestEnsurePagingParamsNotSet(TestPaginateBase):
         del self.parsed_args.page_size
         self.assertIsNone(paginate.ensure_paging_params_not_set(
             self.parsed_args, {}))
+
+
+class TestNonPositiveMaxItems:
+    def test_positive_integer_does_not_raise_warning(self, max_items_page_arg, capsys):
+        max_items_page_arg.add_to_params({}, 1)
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    def test_zero_raises_warning(self, max_items_page_arg, capsys):
+        max_items_page_arg.add_to_params({}, 0)
+        captured = capsys.readouterr()
+        assert "Non-positive values for --max-items" in captured.err
+
+    def test_negative_integer_raises_warning(self, max_items_page_arg, capsys):
+        max_items_page_arg.add_to_params({}, -1)
+        captured = capsys.readouterr()
+        assert "Non-positive values for --max-items" in captured.err

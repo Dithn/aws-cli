@@ -24,8 +24,9 @@ at the man output, we look one step before at the generated rst output
 from awscli.testutils import BaseAWSHelpOutputTest
 from awscli.testutils import FileCreator
 from awscli.testutils import mock
+from awscli.testutils import aws
+from awscli.compat import StringIO
 
-from awscli.compat import six
 from awscli.alias import AliasLoader
 
 
@@ -46,9 +47,9 @@ class TestHelpOutput(BaseAWSHelpOutputTest):
         self.assert_contains('``--no-paginate``')
         # Arg with choices
         self.assert_contains('``--color``')
-        self.assert_contains('* on')
-        self.assert_contains('* off')
-        self.assert_contains('* auto')
+        self.assert_contains('*   on')
+        self.assert_contains('*   off')
+        self.assert_contains('*   auto')
         # Then we should see the services.
         self.assert_contains('* ec2')
         self.assert_contains('* s3api')
@@ -80,22 +81,23 @@ class TestHelpOutput(BaseAWSHelpOutputTest):
         self.assert_contains('Launches the specified number of instances')
         self.assert_contains('``--count`` (string)')
 
-    def test_waiter_does_not_have_duplicate_global_params_link(self):
-        self.driver.main(['ec2', 'wait', 'help'])
-        self.assert_contains_with_count(
-            'for descriptions of global parameters', 1)
-
     def test_custom_service_help_output(self):
         self.driver.main(['s3', 'help'])
         self.assert_contains('.. _cli:aws s3:')
         self.assert_contains('high-level S3 commands')
         self.assert_contains('* cp')
 
+    def test_waiter_does_not_have_global_args(self):
+        self.driver.main(['ec2', 'wait', 'help'])
+        self.assert_not_contains('--debug')
+        self.assert_not_contains('Global Options')
+
     def test_custom_operation_help_output(self):
         self.driver.main(['s3', 'ls', 'help'])
         self.assert_contains('.. _cli:aws s3 ls:')
         self.assert_contains('List S3 objects')
         self.assert_contains('--summarize')
+        self.assert_contains('--debug')
 
     def test_topic_list_help_output(self):
         self.driver.main(['help', 'topics'])
@@ -202,7 +204,7 @@ class TestRemoveDeprecatedCommands(BaseAWSHelpOutputTest):
         # command verify that we get a SystemExit exception
         # and that we get something in stderr that says that
         # we made an invalid choice (because the operation is removed).
-        stderr = six.StringIO()
+        stderr = StringIO()
         with mock.patch('sys.stderr', stderr):
             with self.assertRaises(SystemExit):
                 self.driver.main([service, command, 'help'])
@@ -437,15 +439,15 @@ class TestIotData(BaseAWSHelpOutputTest):
         self.driver.main(['iot-data', 'help'])
         # Ensure the note is in help page.
         self.assert_contains(
-            'The default endpoint data.iot.[region].amazonaws.com is '
-            'intended for testing purposes only.')
+            'The default endpoints (intended for testing purposes only) can be found at '
+            'https://docs.aws.amazon.com/general/latest/gr/iot-core.html#iot-core-data-plane-endpoints')
 
     def test_operation_help_command_has_note(self):
         self.driver.main(['iot-data', 'get-thing-shadow', 'help'])
         # Ensure the note is in help page.
         self.assert_contains(
-            'The default endpoint data.iot.[region].amazonaws.com is '
-            'intended for testing purposes only.')
+            'The default endpoints (intended for testing purposes only) can be found at '
+            'https://docs.aws.amazon.com/general/latest/gr/iot-core.html#iot-core-data-plane-endpoints')
 
 
 class TestSMSVoice(BaseAWSHelpOutputTest):
@@ -481,3 +483,11 @@ class TestStreamingOutputHelp(BaseAWSHelpOutputTest):
         self.driver.main(['s3api', 'get-object', 'help'])
         self.assert_not_contains('outfile <value>')
         self.assert_contains('<outfile>')
+
+
+# Use this test class for "help" cases that require the default renderer
+# (i.e. renderer from get_render()) instead of a mocked version.
+class TestHelpOutputDefaultRenderer:
+    def test_line_lengths_do_not_break_create_launch_template_version_cmd(self):
+        result = aws('ec2 create-launch-template-version help')
+        assert 'exceeds the line-length-limit' not in result.stderr

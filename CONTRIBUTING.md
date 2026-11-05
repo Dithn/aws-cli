@@ -1,13 +1,18 @@
 # Contributing
 
-We work hard to provide a high-quality and useful command line interface, and we greatly value feedback and contributions from our community. Whether it's a new feature, correction, or additional documentation, we welcome your pull requests. Please submit any [issues](https://github.com/aws/aws-cli/issues) or [pull requests](https://github.com/aws/aws-cli/pulls) through GitHub.
+AWS CLI v1 is in maintenance mode. During maintenance mode, releases are
+limited to critical bug fixes and security issues. AWS CLI v1 does not receive
+new features, service API updates, or support for new regions. For more
+information, see the [maintenance mode section of the README](README.rst#aws-cli-v1-is-in-maintenance-mode).
+For new features and other work outside this support level, we recommend
+contributing to AWS CLI v2. See the
+[AWS CLI v2 contributing guide](https://github.com/aws/aws-cli/blob/v2/CONTRIBUTING.rst).
 
-This document contains guidelines for reporting issues or pull requests and contributing code.
 
 ## Reporting Issues
 
 - Check to see if there\'s an existing issue/pull request for the bug/feature. All issues are at <https://github.com/aws/aws-cli/issues> and pull reqs are at <https://github.com/aws/aws-cli/pulls>.
-- If there isn\'t an existing issue there, please file an issue. If possible, used one of the suggested issue types when creating a new issue (like a bug report of feature request). These issue types have their own template and required information. In general, the ideal report includes:
+- If there isn\'t an existing issue there, please file an issue. If possible, use one of the suggested issue types when creating a new issue (like a bug report or feature request). These issue types have their own template and required information. In general, the ideal report includes:
   - A description of the problem/suggestion.
   - The specific AWS CLI commands you are running. Please include debug logs for these commands by appending the `--debug` option to each command. Be sure to remove any sensitive information from the debug logs.
   - The AWS CLI version you are using `aws --version`.
@@ -21,9 +26,13 @@ The list below are guidelines to use when submitting pull requests. These are th
 - The SDK is released under the [Apache license](http://aws.amazon.com/apache2.0/). Any code you submit will be released under that license.
 - We maintain a high percentage of code coverage in our unit tests. As a general rule of thumb, code changes should not lower the overall code coverage percentage for the project. In practice, this means that **every bug fix and feature addition should include tests.**
 - Code should follow [pep8](https://www.python.org/dev/peps/pep-0008/), although if you are modifying an existing module, it is more important for the code to be consistent if there are any discrepancies. Using [`flake8`](https://flake8.pycqa.org/en/latest/) can assist in identifying `pep8` compliance issues.
-- Code must work on `python3.6` and higher.
+- Code must work on Python 3.10 and higher.
 - The AWS CLI is cross platform and code must work on at least Linux, Windows, and Mac OS X. Avoid platform specific behavior.
-- If you would like to implement support for a significant feature that is not yet available in the AWS CLI, please talk to us beforehand to avoid any duplication of effort. You can file an [issue](https://github.com/aws/aws-cli/issues) to discuss the feature request further.
+- AWS CLI v1 does not accept new feature work. To propose or implement a new
+  feature, follow the
+  [AWS CLI v2 contributing guide](https://github.com/aws/aws-cli/blob/v2/CONTRIBUTING.rst)
+  and file an [issue](https://github.com/aws/aws-cli/issues) to discuss the
+  request before beginning implementation.
 
 ## Git Commits and Workflow
 
@@ -85,7 +94,7 @@ When you push to your remote, the output will contain a URL you can use to open 
 
 ## CLI Development Version
 
-If you are interested in using the latest released version of the AWS CLI, please see the [Installation](README.md#installation) section in the README. This section is for anyone who wants to install the development version of the CLI. You might need to do this if:
+If you are interested in using the latest released version of the AWS CLI, please see the [Installation](README.rst#Installation) section in the README. This section is for anyone who wants to install the development version of the CLI. You might need to do this if:
 
 - You are developing a feature for the CLI and plan on submitting a Pull Request.
 - You want to test the latest changes of the CLI before they make it into an official release.
@@ -94,13 +103,12 @@ The latest changes to the CLI are in the `develop` branch on github. This is the
 
 Additionally, the [`botocore`](https://github.com/boto/botocore) package is developed in lockstep with the CLI.
 
-If you just want to install a snapshot of the latest development version of the CLI, you can use the `requirements.txt` file included in this repo. This file points to the development version of the above packages:
+Since `botocore` and `s3transfer` are vendored directly into the `awscli`
+package, you do not need to install them separately. Simply install the CLI
+in editable mode:
 
     $ cd <path_to_awscli>
-    $ python -m pip install -r requirements.txt
     $ python -m pip install -e .
-
-However, to keep up to date, you will continually have to run the `python -m pip install -r requirements.txt` file to pull in the latest changes from the develop branch of botocore.
 
 You can optionally clone each of those repositories and run \"python -m pip install -e .\":
 
@@ -108,3 +116,22 @@ You can optionally clone each of those repositories and run \"python -m pip inst
     $ python -m pip install -e . && cd ..
     $ git clone <awscli> && cd aws-cli/
     $ python -m pip install -e .
+
+## Automated Tools
+
+The use of AI tooling for assisted development work is accepted and encouraged
+in this repository, but due to the volume of submissions we ask that you observe
+the following rules:
+
+- All issue and pull request submissions to this repository that are sourced by
+  AI must first be reviewed by a human before submitting to the repository.
+  Items reviewed in this way must include a statement like "generated by AI
+  tools, and reviewed by <person>"
+- Please ensure that your submissions are actually improvements. While we are
+  grateful for any proposed fixes, even if they are very small, behavior that
+  looks like creating nuisance PRs or artificially inflating submission counts
+  is not acceptable.
+- We may close issues or pull requests, or limit your ability to interact with
+  this repository, for behavior that in our estimation violates these rules or
+  any of the other rules in this repository's
+  [Code of Conduct](CODE_OF_CONDUCT.md)

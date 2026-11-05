@@ -13,6 +13,7 @@
 
 
 DOC_EVENTS = {
+    'doc-meta-description': '.%s',
     'doc-breadcrumbs': '.%s',
     'doc-title': '.%s',
     'doc-description': '.%s',
@@ -23,6 +24,7 @@ DOC_EVENTS = {
     'doc-option': '.%s.%s',
     'doc-option-example': '.%s.%s',
     'doc-options-end': '.%s',
+    'doc-global-option': '.%s',
     'doc-examples': '.%s',
     'doc-output': '.%s',
     'doc-subitems-start': '.%s',
@@ -37,6 +39,8 @@ DOC_EVENTS = {
 def generate_events(session, help_command):
     # Now generate the documentation events
     session.emit('doc-breadcrumbs.%s' % help_command.event_class,
+                 help_command=help_command)
+    session.emit('doc-meta-description.%s' % help_command.event_class,
                  help_command=help_command)
     session.emit('doc-title.%s' % help_command.event_class,
                  help_command=help_command)
@@ -73,6 +77,8 @@ def generate_events(session, help_command):
                          (help_command.event_class, arg_name),
                          arg_name=arg_name, help_command=help_command)
     session.emit('doc-options-end.%s' % help_command.event_class,
+                 help_command=help_command)
+    session.emit('doc-global-option.%s' % help_command.event_class,
                  help_command=help_command)
     session.emit('doc-subitems-start.%s' % help_command.event_class,
                  help_command=help_command)

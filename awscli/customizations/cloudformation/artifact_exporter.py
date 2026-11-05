@@ -18,7 +18,6 @@ import zipfile
 import contextlib
 import uuid
 import shutil
-from awscli.compat import six
 from botocore.utils import set_value_from_jmespath
 
 from awscli.compat import urlparse
@@ -33,7 +32,7 @@ LOG = logging.getLogger(__name__)
 
 
 def is_path_value_valid(path):
-    return isinstance(path, six.string_types)
+    return isinstance(path, str)
 
 
 def make_abs_path(directory, path):
@@ -70,7 +69,7 @@ def parse_s3_url(url,
                  object_key_property="Key",
                  version_property=None):
 
-    if isinstance(url, six.string_types) \
+    if isinstance(url, str) \
             and url.startswith("s3://"):
 
         # Python < 2.7.10 don't parse query parameters from URI with custom
@@ -426,6 +425,15 @@ class StepFunctionsStateMachineDefinitionResource(ResourceWithS3UrlDict):
     PACKAGE_NULL_PROPERTY = False
 
 
+class ServerlessStateMachineDefinitionResource(ResourceWithS3UrlDict):
+    RESOURCE_TYPE = "AWS::Serverless::StateMachine"
+    PROPERTY_NAME = "DefinitionUri"
+    BUCKET_NAME_PROPERTY = "Bucket"
+    OBJECT_KEY_PROPERTY = "Key"
+    VERSION_PROPERTY = "Version"
+    PACKAGE_NULL_PROPERTY = False
+
+
 class CloudFormationStackResource(Resource):
     """
     Represents CloudFormation::Stack resource that can refer to a nested
@@ -497,6 +505,20 @@ class GlueJobCommandScriptLocationResource(Resource):
     PROPERTY_NAME = "Command.ScriptLocation"
 
 
+class CodeCommitRepositoryS3Resource(ResourceWithS3UrlDict):
+    """
+    Represents CodeCommit::Repository resource.
+    """
+    RESOURCE_TYPE = "AWS::CodeCommit::Repository"
+    PROPERTY_NAME = "Code.S3"
+    BUCKET_NAME_PROPERTY = "Bucket"
+    OBJECT_KEY_PROPERTY = "Key"
+    VERSION_PROPERTY = "ObjectVersion"
+    # Don't package the directory if S3 is omitted.
+    PACKAGE_NULL_PROPERTY = False
+    FORCE_ZIP = True
+
+
 RESOURCES_EXPORT_LIST = [
     ServerlessFunctionResource,
     ServerlessApiResource,
@@ -513,7 +535,9 @@ RESOURCES_EXPORT_LIST = [
     ServerlessLayerVersionResource,
     LambdaLayerVersionResource,
     GlueJobCommandScriptLocationResource,
-    StepFunctionsStateMachineDefinitionResource
+    StepFunctionsStateMachineDefinitionResource,
+    ServerlessStateMachineDefinitionResource,
+    CodeCommitRepositoryS3Resource
 ]
 
 METADATA_EXPORT_LIST = [
@@ -634,7 +658,18 @@ class Template(object):
 
         self.template_dict = self.export_global_artifacts(self.template_dict)
 
-        for resource_id, resource in self.template_dict["Resources"].items():
+        self.export_resources(self.template_dict["Resources"])
+
+        return self.template_dict
+
+    def export_resources(self, resource_dict):
+        for resource_id, resource in resource_dict.items():
+
+            if resource_id.startswith("Fn::ForEach::"):
+                if not isinstance(resource, list) or len(resource) != 3:
+                    raise exceptions.InvalidForEachIntrinsicFunctionError(resource_id=resource_id)
+                self.export_resources(resource[2])
+                continue
 
             resource_type = resource.get("Type", None)
             resource_dict = resource.get("Properties", None)
@@ -646,5 +681,3 @@ class Template(object):
                 # Export code resources
                 exporter = exporter_class(self.uploader)
                 exporter.export(resource_id, resource_dict, self.template_dir)
-
-        return self.template_dict

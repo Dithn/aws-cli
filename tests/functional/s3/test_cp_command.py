@@ -13,14 +13,17 @@
 # language governing permissions and limitations under the License.
 import os
 
-from awscli.testutils import BaseAWSCommandParamsTest
+from awscli.testutils import BaseAWSCommandParamsTest, skip_if_windows, temporary_file, create_clidriver
 from awscli.testutils import capture_input
 from awscli.testutils import mock 
-from awscli.compat import six
+from awscli.compat import BytesIO
 from tests.functional.s3 import BaseS3TransferCommandTest
+from tests.functional.s3.test_sync_command import TestSyncCaseConflict
+from tests import requires_crt
 
+MB = 1024**2
 
-class BufferedBytesIO(six.BytesIO):
+class BufferedBytesIO(BytesIO):
     @property
     def buffer(self):
         return self
@@ -31,6 +34,10 @@ class BaseCPCommandTest(BaseS3TransferCommandTest):
 
 
 class TestCPCommand(BaseCPCommandTest):
+    def setUp(self):
+        super().setUp()
+        self.multipart_threshold = 8 * MB
+
     def test_operations_used_in_upload(self):
         full_path = self.files.create_file('foo.txt', 'mycontent')
         cmdline = '%s %s s3://bucket/key.txt' % (self.prefix, full_path)
@@ -81,7 +88,7 @@ class TestCPCommand(BaseCPCommandTest):
             {'Key': u'key.txt', 'Bucket': u'bucket', 'GrantRead': u'id=foo',
              'GrantFullControl': u'id=bar', 'GrantReadACP': u'id=biz',
              'GrantWriteACP': u'id=baz', 'ContentType': u'text/plain',
-             'Body': mock.ANY}
+             'Body': mock.ANY, 'ChecksumAlgorithm': 'CRC32'}
         )
 
     def test_upload_expires(self):
@@ -176,8 +183,12 @@ class TestCPCommand(BaseCPCommandTest):
 
     def test_operations_used_in_download_file(self):
         self.parsed_responses = [
-            {"ContentLength": "100", "LastModified": "00:00:00Z"},
-            {'ETag': '"foo-1"', 'Body': six.BytesIO(b'foo')},
+            {
+                "ContentLength": "100",
+                "LastModified": "00:00:00Z",
+                "ETag": '"foo-1"'
+            },
+            {'ETag': '"foo-1"', 'Body': BytesIO(b'foo')},
         ]
         cmdline = '%s s3://bucket/key.txt %s' % (self.prefix,
                                                  self.files.rootdir)
@@ -214,7 +225,11 @@ class TestCPCommand(BaseCPCommandTest):
 
     def test_metadata_copy(self):
         self.parsed_responses = [
-            {"ContentLength": "100", "LastModified": "00:00:00Z"},
+            {
+                "ContentLength": "100",
+                "LastModified": "00:00:00Z",
+                'ETag': '"foo-1"',
+            },
             {'ETag': '"foo-1"'},
         ]
         cmdline = ('%s s3://bucket/key.txt s3://bucket/key2.txt'
@@ -262,7 +277,11 @@ class TestCPCommand(BaseCPCommandTest):
 
     def test_metadata_directive_copy(self):
         self.parsed_responses = [
-            {"ContentLength": "100", "LastModified": "00:00:00Z"},
+            {
+                "ContentLength": "100",
+                "LastModified": "00:00:00Z",
+                "ETag": "'foo-1'",
+            },
             {'ETag': '"foo-1"'},
         ]
         cmdline = ('%s s3://bucket/key.txt s3://bucket/key2.txt'
@@ -304,8 +323,12 @@ class TestCPCommand(BaseCPCommandTest):
         full_path = self.files.create_file('foo.txt', '')
         cmdline = '%s s3://bucket/key.txt %s' % (self.prefix, full_path)
         self.parsed_responses = [
-            {"ContentLength": "100", "LastModified": "00:00:00Z"},
-            {'ETag': '"foo-1"', 'Body': six.BytesIO(b'foo')}
+            {
+                "ContentLength": "100",
+                "LastModified": "00:00:00Z",
+                "ETag": '"foo-1"'
+            },
+            {'ETag': '"foo-1"', 'Body': BytesIO(b'foo')}
         ]
         with mock.patch('os.utime') as mock_utime:
             mock_utime.side_effect = OSError(1, '')
@@ -316,14 +339,17 @@ class TestCPCommand(BaseCPCommandTest):
         self.parsed_responses = [
             {
                 'Contents': [
-                    {'Key': 'foo/bar.txt', 'ContentLength': '100',
-                     'LastModified': '00:00:00Z',
-                     'StorageClass': 'GLACIER',
-                     'Size': 100},
+                    {
+                        'Key': 'foo/bar.txt', 'ContentLength': '100',
+                        'LastModified': '00:00:00Z',
+                        'StorageClass': 'GLACIER',
+                        'Size': 100,
+                        'ETag': '"foo-1"',
+                     },
                 ],
                 'CommonPrefixes': []
             },
-            {'ETag': '"foo-1"', 'Body': six.BytesIO(b'foo')},
+            {'ETag': '"foo-1"', 'Body': BytesIO(b'foo')},
         ]
         cmdline = '%s s3://bucket/foo %s --recursive --force-glacier-transfer'\
                   % (self.prefix, self.files.rootdir)
@@ -448,6 +474,7 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertDictEqual(
             self.operations_called[0][1],
             {'Key': 'key.txt', 'Bucket': 'bucket',
+             'ChecksumAlgorithm': 'CRC32',
              'ContentType': 'text/plain', 'Body': mock.ANY,
              'ServerSideEncryption': 'AES256'}
         )
@@ -463,6 +490,7 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertDictEqual(
             self.operations_called[0][1],
             {'Key': 'key.txt', 'Bucket': 'bucket',
+             'ChecksumAlgorithm': 'CRC32',
              'ContentType': 'text/plain', 'Body': mock.ANY,
              'SSECustomerAlgorithm': 'AES256', 'SSECustomerKey': 'foo'}
         )
@@ -487,6 +515,7 @@ class TestCPCommand(BaseCPCommandTest):
 
         expected_args = {
             'Key': 'key.txt', 'Bucket': 'bucket',
+            'ChecksumAlgorithm': 'CRC32',
             'ContentType': 'text/plain',
             'Body': mock.ANY,
             'SSECustomerAlgorithm': 'AES256',
@@ -511,7 +540,7 @@ class TestCPCommand(BaseCPCommandTest):
                 "ContentLength": 4,
                 "ETag": '"d3b07384d113edec49eaa6238ad5ff00"',
                 "LastModified": "Tue, 12 Jul 2016 21:26:07 GMT",
-                "Body": six.BytesIO(b'foo\n')
+                "Body": BytesIO(b'foo\n')
             },
             {}
         ]
@@ -534,10 +563,16 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertEqual(len(self.operations_called), 2)
         self.assertEqual(self.operations_called[0][0].name, 'HeadObject')
         self.assertEqual(self.operations_called[1][0].name, 'CopyObject')
+        expected_head_args = {
+            'Bucket': 'bucket-one',
+            'Key': 'key.txt',
+            'SSECustomerAlgorithm': 'AES256',
+            'SSECustomerKey': key_contents,
+        }
+        self.assertDictEqual(self.operations_called[0][1], expected_head_args)
 
         expected_args = {
             'Key': 'key.txt', 'Bucket': 'bucket',
-            'ContentType': 'text/plain',
             'CopySource': {
                 'Bucket': 'bucket-one',
                 'Key': 'key.txt'
@@ -547,6 +582,171 @@ class TestCPCommand(BaseCPCommandTest):
         }
         self.assertDictEqual(self.operations_called[1][1], expected_args)
 
+    def test_s3s3_cp_with_destination_sse_c(self):
+        """S3->S3 copy with an unencrypted source and encrypted destination"""
+        self.parsed_responses = [
+            self.head_object_response(),
+            self.copy_object_response(),
+        ]
+        cmdline = (
+                '%s s3://bucket-one/key.txt s3://bucket/key.txt '
+                '--sse-c --sse-c-key destination-key' % self.prefix
+        )
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(len(self.operations_called), 2)
+        self.assertEqual(self.operations_called[0][0].name, 'HeadObject')
+        expected_head_args = {
+            'Bucket': 'bucket-one',
+            'Key': 'key.txt',
+            # don't expect to see SSE-c params for the source
+        }
+        self.assertDictEqual(self.operations_called[0][1], expected_head_args)
+
+        self.assertEqual(self.operations_called[1][0].name, 'CopyObject')
+        expected_copy_args = {
+            'Key': 'key.txt',
+            'Bucket': 'bucket',
+            'CopySource': {'Bucket': 'bucket-one', 'Key': 'key.txt'},
+            'SSECustomerAlgorithm': 'AES256',
+            'SSECustomerKey': 'destination-key',
+        }
+        self.assertDictEqual(self.operations_called[1][1], expected_copy_args)
+
+    def test_s3s3_cp_with_different_sse_c_keys(self):
+        """S3->S3 copy with different SSE-C keys for source and destination"""
+        self.parsed_responses = [
+            self.head_object_response(),
+            self.copy_object_response(),
+        ]
+        cmdline = (
+                '%s s3://bucket-one/key.txt s3://bucket/key.txt '
+                '--sse-c-copy-source --sse-c-copy-source-key foo --sse-c --sse-c-key bar'
+                % self.prefix
+        )
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(len(self.operations_called), 2)
+        self.assertEqual(self.operations_called[0][0].name, 'HeadObject')
+        expected_head_args = {
+            'Bucket': 'bucket-one',
+            'Key': 'key.txt',
+            'SSECustomerAlgorithm': 'AES256',
+            'SSECustomerKey': 'foo',
+        }
+        self.assertDictEqual(self.operations_called[0][1], expected_head_args)
+
+        self.assertEqual(self.operations_called[1][0].name, 'CopyObject')
+        expected_copy_args = {
+            'Key': 'key.txt',
+            'Bucket': 'bucket',
+            'CopySource': {'Bucket': 'bucket-one', 'Key': 'key.txt'},
+            'SSECustomerAlgorithm': 'AES256',
+            'SSECustomerKey': 'bar',
+            'CopySourceSSECustomerAlgorithm': 'AES256',
+            'CopySourceSSECustomerKey': 'foo',
+        }
+        self.assertDictEqual(self.operations_called[1][1], expected_copy_args)
+
+    def test_s3s3_cp_with_destination_sse_c_multipart(self):
+        """S3->S3 multipart copy with unencrypted source and encrypted destination"""
+        self.parsed_responses = [
+            self.head_object_response(ContentLength=self.multipart_threshold),
+            self.create_mpu_response('upload_id'),
+            self.upload_part_copy_response(),
+            self.complete_mpu_response(),
+        ]
+        cmdline = (
+                '%s s3://bucket-one/key.txt s3://bucket/key.txt '
+                '--sse-c --sse-c-key destination-key' % self.prefix
+        )
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assert_operations_called(
+            [
+                self.head_object_request(
+                    'bucket-one',
+                    'key.txt',
+                    # no SSE-C params — source is unencrypted
+                ),
+                self.create_mpu_request(
+                    'bucket',
+                    'key.txt',
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='destination-key',
+                ),
+                self.upload_part_copy_request(
+                    'bucket-one',
+                    'key.txt',
+                    'bucket',
+                    'key.txt',
+                    'upload_id',
+                    PartNumber=mock.ANY,
+                    CopySourceRange=mock.ANY,
+                    CopySourceIfMatch='"foo-1"',
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='destination-key',
+                ),
+                self.complete_mpu_request(
+                    'bucket',
+                    'key.txt',
+                    'upload_id',
+                    num_parts=1,
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='destination-key',
+                ),
+            ]
+        )
+
+    def test_s3s3_cp_with_different_sse_c_keys_multipart(self):
+        """S3->S3 multipart copy with different SSE-C keys"""
+        self.parsed_responses = [
+            self.head_object_response(ContentLength=self.multipart_threshold),
+            self.create_mpu_response('upload_id'),
+            self.upload_part_copy_response(),
+            self.complete_mpu_response(),
+        ]
+        cmdline = (
+                '%s s3://bucket-one/key.txt s3://bucket/key.txt '
+                '--sse-c-copy-source --sse-c-copy-source-key source-key --sse-c --sse-c-key destination-key'
+                % self.prefix
+        )
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assert_operations_called(
+            [
+                self.head_object_request(
+                    'bucket-one',
+                    'key.txt',
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='source-key',
+                ),
+                self.create_mpu_request(
+                    'bucket',
+                    'key.txt',
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='destination-key',
+                ),
+                self.upload_part_copy_request(
+                    'bucket-one',
+                    'key.txt',
+                    'bucket',
+                    'key.txt',
+                    'upload_id',
+                    PartNumber=mock.ANY,
+                    CopySourceRange=mock.ANY,
+                    CopySourceIfMatch='"foo-1"',
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='destination-key',
+                    CopySourceSSECustomerAlgorithm='AES256',
+                    CopySourceSSECustomerKey='source-key',
+                ),
+                self.complete_mpu_request(
+                    'bucket',
+                    'key.txt',
+                    'upload_id',
+                    num_parts=1,
+                    SSECustomerAlgorithm='AES256',
+                    SSECustomerKey='destination-key',
+                ),
+            ]
+        )
 
     # Note ideally the kms sse with a key id would be integration tests
     # However, you cannot delete kms keys so there would be no way to clean
@@ -562,6 +762,7 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertDictEqual(
             self.operations_called[0][1],
             {'Key': 'key.txt', 'Bucket': 'bucket',
+             'ChecksumAlgorithm': 'CRC32',
              'ContentType': 'text/plain', 'Body': mock.ANY,
              'SSEKMSKeyId': 'foo', 'ServerSideEncryption': 'aws:kms'}
         )
@@ -587,13 +788,18 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertDictEqual(
             self.operations_called[0][1],
             {'Key': 'key.txt', 'Bucket': 'bucket',
+             'ChecksumAlgorithm': 'CRC32',
              'ContentType': 'text/plain',
              'SSEKMSKeyId': 'foo', 'ServerSideEncryption': 'aws:kms'}
         )
 
     def test_cp_copy_with_sse_kms_and_key_id(self):
         self.parsed_responses = [
-            {'ContentLength': 5, 'LastModified': '00:00:00Z'},  # HeadObject
+            {
+                'ContentLength': 5,
+                'LastModified': '00:00:00Z',
+                'ETag': '"foo"',
+            },  # HeadObject
             {}  # CopyObject
         ]
         cmdline = (
@@ -607,7 +813,6 @@ class TestCPCommand(BaseCPCommandTest):
             {
                 'Key': 'key2.txt',
                 'Bucket': 'bucket',
-                'ContentType': 'text/plain',
                 'CopySource': {
                     'Bucket': 'bucket',
                     'Key': 'key1.txt'
@@ -619,8 +824,11 @@ class TestCPCommand(BaseCPCommandTest):
 
     def test_cp_copy_large_file_with_sse_kms_and_key_id(self):
         self.parsed_responses = [
-            {'ContentLength': 10 * (1024 ** 2),
-             'LastModified': '00:00:00Z'},  # HeadObject
+            {
+                'ContentLength': 10 * (1024 ** 2),
+                'LastModified': '00:00:00Z',
+                'ETag': '"foo"',
+            },  # HeadObject
             {'UploadId': 'foo'},  # CreateMultipartUpload
             {'CopyPartResult': {'ETag': '"foo"'}},  # UploadPartCopy
             {'CopyPartResult': {'ETag': '"foo"'}},  # UploadPartCopy
@@ -639,7 +847,6 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertDictEqual(
             self.operations_called[1][1],
             {'Key': 'key2.txt', 'Bucket': 'bucket',
-             'ContentType': 'text/plain',
              'SSEKMSKeyId': 'foo', 'ServerSideEncryption': 'aws:kms'}
         )
 
@@ -652,8 +859,11 @@ class TestCPCommand(BaseCPCommandTest):
 
     def test_upload_unicode_path(self):
         self.parsed_responses = [
-            {'ContentLength': 10,
-             'LastModified': '00:00:00Z'},  # HeadObject
+            {
+                'ContentLength': 10,
+                'LastModified': '00:00:00Z',
+                'ETag': '"foo"',
+            },  # HeadObject
             {'ETag': '"foo"'}  # PutObject
         ]
         command = u's3 cp s3://bucket/\u2603 s3://bucket/\u2713'
@@ -692,6 +902,190 @@ class TestCPCommand(BaseCPCommandTest):
         self.assertIn('upload failed', stderr)
         self.assertIn('warning: File has an invalid timestamp.', stderr)
 
+    def test_upload_with_checksum_algorithm_sha1(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm SHA1'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'SHA1')
+
+    def test_upload_with_checksum_algorithm_sha256(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm SHA256'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'SHA256')
+
+    def test_upload_with_checksum_algorithm_sha512(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm SHA512'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'SHA512')
+
+    def test_upload_with_checksum_algorithm_crc32(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm CRC32'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'CRC32')
+
+    @requires_crt()
+    def test_upload_with_checksum_algorithm_crc32c(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm CRC32C'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'CRC32C')
+
+    @requires_crt()
+    def test_upload_with_checksum_algorithm_crc64nvme(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm CRC64NVME'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'CRC64NVME')
+
+    @requires_crt()
+    def test_upload_with_checksum_algorithm_xxhash3(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm XXHASH3'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'XXHASH3')
+
+
+    @requires_crt()
+    def test_upload_with_checksum_algorithm_xxhash64(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm XXHASH64'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'XXHASH64')
+
+    @requires_crt()
+    def test_upload_with_checksum_algorithm_xxhash128(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --checksum-algorithm XXHASH128'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[0][0].name, 'PutObject')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'XXHASH128')
+
+    def test_multipart_upload_with_checksum_algorithm_crc32(self):
+        full_path = self.files.create_file('foo.txt', 'a' * 10 * (1024 ** 2))
+        self.parsed_responses = [
+            {'UploadId': 'foo'},
+            {'ETag': 'foo-e1', 'ChecksumCRC32': 'foo-1'},
+            {'ETag': 'foo-e2', 'ChecksumCRC32': 'foo-2'},
+            {}
+        ]
+        cmdline = ('%s %s s3://bucket/key2.txt'
+                   ' --checksum-algorithm CRC32' % (self.prefix, full_path))
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(len(self.operations_called), 4, self.operations_called)
+        self.assertEqual(self.operations_called[0][0].name, 'CreateMultipartUpload')
+        self.assertEqual(self.operations_called[0][1]['ChecksumAlgorithm'], 'CRC32')
+        self.assertEqual(self.operations_called[1][0].name, 'UploadPart')
+        self.assertEqual(self.operations_called[1][1]['ChecksumAlgorithm'], 'CRC32')
+        self.assertEqual(self.operations_called[3][0].name, 'CompleteMultipartUpload')
+        self.assertIn({'ETag': 'foo-e1', 'ChecksumCRC32': 'foo-1', 'PartNumber': mock.ANY},
+                      self.operations_called[3][1]['MultipartUpload']['Parts'])
+        self.assertIn({'ETag': 'foo-e2', 'ChecksumCRC32': 'foo-2', 'PartNumber': mock.ANY},
+                      self.operations_called[3][1]['MultipartUpload']['Parts'])
+
+    def test_copy_with_checksum_algorithm_crc32(self):
+        self.parsed_responses = [
+            self.head_object_response(),
+            # Mocked CopyObject response with a CRC32 checksum specified
+            {
+                'ETag': 'foo-1',
+                'ChecksumCRC32': 'Tq0H4g=='
+            }
+        ]
+        cmdline = f'{self.prefix} s3://bucket1/key.txt s3://bucket2/key.txt --checksum-algorithm CRC32'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[1][0].name, 'CopyObject')
+        self.assertEqual(self.operations_called[1][1]['ChecksumAlgorithm'], 'CRC32')
+
+    def test_download_with_checksum_mode_crc32(self):
+        self.parsed_responses = [
+            self.head_object_response(),
+            # Mocked GetObject response with a checksum algorithm specified
+            {
+                'ETag': 'foo-1',
+                'ChecksumCRC32': 'Tq0H4g==',
+                'Body': BytesIO(b'foo')
+            }
+        ]
+        cmdline = f'{self.prefix} s3://bucket/foo {self.files.rootdir} --checksum-mode ENABLED'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[1][0].name, 'GetObject')
+        self.assertEqual(self.operations_called[1][1]['ChecksumMode'], 'ENABLED')
+
+    def test_download_with_checksum_mode_crc32c(self):
+        self.parsed_responses = [
+            self.head_object_response(),
+            # Mocked GetObject response with a checksum algorithm specified
+            {
+                'ETag': 'foo-1',
+                'ChecksumCRC32C': 'checksum',
+                'Body': BytesIO(b'foo')
+            }
+        ]
+        cmdline = f'{self.prefix} s3://bucket/foo {self.files.rootdir} --checksum-mode ENABLED'
+        self.run_cmd(cmdline, expected_rc=0)
+        self.assertEqual(self.operations_called[1][0].name, 'GetObject')
+        self.assertEqual(self.operations_called[1][1]['ChecksumMode'], 'ENABLED')
+
+    def test_upload_with_no_checksum_param_v2_debug(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = f'{self.prefix} {full_path} s3://bucket/key.txt --v2-debug'
+        _, stderr, _ = self.run_cmd(cmdline, expected_rc=0)
+        self.assertIn(
+            'AWS CLI v2 UPGRADE WARNING: In AWS CLI v2, for `aws s3` '
+            'commands that upload a file to an S3 bucket, Cyclic Redundancy '
+            'Check 64 (CRC64NVME) will be used to compute object checksums by '
+            'default and included in the request.',
+            stderr
+        )
+
+    def test_upload_with_no_checksum_when_required_v2_debug(self):
+        with temporary_file('w') as f:
+            f.write(
+                "[default]\n"
+                "request_checksum_calculation = when_required\n"
+            )
+            f.flush()
+            self.environ['AWS_CONFIG_FILE'] = f.name
+            self.driver = create_clidriver()
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = (
+            f'{self.prefix} {full_path} s3://bucket/key.txt --v2-debug'
+        )
+        _, stderr, _ = self.run_cmd(cmdline, expected_rc=0)
+        self.assertNotIn(
+            'AWS CLI v2 UPGRADE WARNING: In AWS CLI v2, for `aws s3` '
+            'commands that upload a file to an S3 bucket, Cyclic Redundancy '
+            'Check 64 (CRC64NVME) will be used to compute object checksums by '
+            'default and included in the request.',
+            stderr
+        )
+
+    def test_upload_with_crc32_checksum_v2_debug(self):
+        full_path = self.files.create_file('foo.txt', 'contents')
+        cmdline = (
+            f'{self.prefix} {full_path} s3://bucket/key.txt '
+            '--checksum-algorithm CRC32 --v2-debug'
+        )
+        _, stderr, _ = self.run_cmd(cmdline, expected_rc=0)
+        self.assertNotIn(
+            'AWS CLI v2 UPGRADE WARNING: In AWS CLI v2, for `aws s3` '
+            'commands that upload a file to an S3 bucket, Cyclic Redundancy '
+            'Check 64 (CRC64NVME) will be used to compute object checksums by '
+            'default and included in the request.',
+            stderr
+        )
+
 
 class TestStreamingCPCommand(BaseAWSCommandParamsTest):
     def test_streaming_upload(self):
@@ -709,6 +1103,7 @@ class TestStreamingCPCommand(BaseAWSCommandParamsTest):
         expected_args = {
             'Bucket': 'bucket',
             'Key': 'streaming.txt',
+            'ChecksumAlgorithm': 'CRC32',
             'Body': mock.ANY
         }
 
@@ -730,6 +1125,7 @@ class TestStreamingCPCommand(BaseAWSCommandParamsTest):
         expected_args = {
             'Bucket': 'bucket',
             'Key': 'streaming.txt',
+            'ChecksumAlgorithm': 'CRC32',
             'Body': mock.ANY
         }
 
@@ -789,7 +1185,7 @@ class TestStreamingCPCommand(BaseAWSCommandParamsTest):
                 "ContentLength": 4,
                 "ETag": '"d3b07384d113edec49eaa6238ad5ff00"',
                 "LastModified": "Tue, 12 Jul 2016 21:26:07 GMT",
-                "Body": six.BytesIO(b'foo\n')
+                "Body": BytesIO(b'foo\n')
             }
         ]
 
@@ -835,6 +1231,7 @@ class TestCpCommandWithRequesterPayer(BaseCPCommandTest):
                 ('PutObject', {
                     'Bucket': 'mybucket',
                     'Key': 'mykey',
+                    'ChecksumAlgorithm': 'CRC32',
                     'RequestPayer': 'requester',
                     'Body': mock.ANY,
                 })
@@ -859,11 +1256,13 @@ class TestCpCommandWithRequesterPayer(BaseCPCommandTest):
                 ('CreateMultipartUpload', {
                     'Bucket': 'mybucket',
                     'Key': 'mykey',
+                    'ChecksumAlgorithm': 'CRC32',
                     'RequestPayer': 'requester',
                 }),
                 ('UploadPart', {
                     'Bucket': 'mybucket',
                     'Key': 'mykey',
+                    'ChecksumAlgorithm': 'CRC32',
                     'RequestPayer': 'requester',
                     'UploadId': 'myid',
                     'PartNumber': mock.ANY,
@@ -872,6 +1271,7 @@ class TestCpCommandWithRequesterPayer(BaseCPCommandTest):
                 ('UploadPart', {
                     'Bucket': 'mybucket',
                     'Key': 'mykey',
+                    'ChecksumAlgorithm': 'CRC32',
                     'RequestPayer': 'requester',
                     'UploadId': 'myid',
                     'PartNumber': mock.ANY,
@@ -904,6 +1304,7 @@ class TestCpCommandWithRequesterPayer(BaseCPCommandTest):
                 ('PutObject', {
                     'Bucket': 'mybucket',
                     'Key': 'myfile',
+                    'ChecksumAlgorithm': 'CRC32',
                     'RequestPayer': 'requester',
                     'Body': mock.ANY,
                 })
@@ -944,10 +1345,14 @@ class TestCpCommandWithRequesterPayer(BaseCPCommandTest):
                     'mybucket', 'mykey', RequestPayer='requester'),
                 self.get_object_request(
                     'mybucket', 'mykey', Range=mock.ANY,
-                    RequestPayer='requester'),
+                    RequestPayer='requester',
+                    IfMatch='"foo-1"',
+                ),
                 self.get_object_request(
                     'mybucket', 'mykey', Range=mock.ANY,
-                    RequestPayer='requester'),
+                    RequestPayer='requester',
+                    IfMatch='"foo-1"',
+                ),
             ]
         )
 
@@ -1011,11 +1416,11 @@ class TestCpCommandWithRequesterPayer(BaseCPCommandTest):
                 self.upload_part_copy_request(
                     'sourcebucket', 'sourcekey', 'mybucket', 'mykey',
                     upload_id, PartNumber=mock.ANY, RequestPayer='requester',
-                    CopySourceRange=mock.ANY),
+                    CopySourceRange=mock.ANY, CopySourceIfMatch='"foo-1"'),
                 self.upload_part_copy_request(
                     'sourcebucket', 'sourcekey', 'mybucket', 'mykey',
                     upload_id, PartNumber=mock.ANY, RequestPayer='requester',
-                    CopySourceRange=mock.ANY),
+                    CopySourceRange=mock.ANY, CopySourceIfMatch='"foo-1"'),
                 self.complete_mpu_request(
                     'mybucket', 'mykey', upload_id, num_parts=2,
                     RequestPayer='requester')
@@ -1147,6 +1552,7 @@ class TestAccesspointCPCommand(BaseCPCommandTest):
             ]
         )
 
+    @requires_crt()
     def test_accepts_mrap_arns(self):
         mrap_arn = (
             'arn:aws:s3::123456789012:accesspoint:mfzwi23gnjvgw.mrap'
@@ -1162,6 +1568,7 @@ class TestAccesspointCPCommand(BaseCPCommandTest):
             ]
         )
 
+    @requires_crt()
     def test_accepts_mrap_arns_with_slash(self):
         mrap_arn = (
             'arn:aws:s3::123456789012:accesspoint/mfzwi23gnjvgw.mrap'
@@ -1176,3 +1583,55 @@ class TestAccesspointCPCommand(BaseCPCommandTest):
                 self.put_object_request(mrap_arn, 'mykey')
             ]
         )
+
+
+class TestCpRecursiveCaseConflict(TestSyncCaseConflict):
+    prefix = 's3 cp --recursive '
+
+    def test_ignore_by_default(self):
+        self.files.create_file(self.lower_key, 'mycontent')
+        # Note there's no --case-conflict param.
+        cmd = f"{self.prefix} s3://bucket {self.files.rootdir}"
+        self.parsed_responses = [
+            self.list_objects_response([self.upper_key]),
+            self.get_object_response(),
+        ]
+        # Expect success, so not error mode.
+        _, stderr, _ = self.run_cmd(cmd, expected_rc=0)
+        # No warnings in stderr, so not warn or skip mode.
+        assert not stderr
+
+
+class TestS3ExpressCpRecursive(BaseCPCommandTest):
+    prefix = 's3 cp --recursive '
+
+    def test_s3_express_error_raises_exception(self):
+        cmd = (
+            f"{self.prefix} s3://bucket--usw2-az1--x-s3 {self.files.rootdir} "
+            "--case-conflict error"
+        )
+        _, stderr, _ = self.run_cmd(cmd, expected_rc=255)
+        assert "`error` is not a valid value" in stderr
+
+    def test_s3_express_skip_raises_exception(self):
+        cmd = (
+            f"{self.prefix} s3://bucket--usw2-az1--x-s3 {self.files.rootdir} "
+            "--case-conflict skip"
+        )
+        _, stderr, _ = self.run_cmd(cmd, expected_rc=255)
+        assert "`skip` is not a valid value" in stderr
+
+    @skip_if_windows("Can't rename to same file")
+    def test_s3_express_warn_emits_warning(self):
+        cmd = (
+            f"{self.prefix} s3://bucket--usw2-az1--x-s3 {self.files.rootdir} "
+            "--case-conflict warn"
+        )
+        self.parsed_responses = [
+            self.list_objects_response(['a.txt', 'A.txt']),
+            self.get_object_response(),
+            self.get_object_response(),
+        ]
+
+        _, stderr, _ = self.run_cmd(cmd, expected_rc=0)
+        assert "warning: Recursive copies/moves" in stderr

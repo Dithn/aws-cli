@@ -14,9 +14,8 @@ import zipfile
 import copy
 from contextlib import closing
 
-from botocore.vendored import six
-
 from awscli.arguments import CustomArgument, CLIArgument
+from awscli.compat import BytesIO
 
 
 ERROR_MSG = (
@@ -51,7 +50,7 @@ class ZipFileArgumentHoister(object):
 
     Injects a top-level ZipFileArgument into the argument table which maps
     a --zip-file parameter to the underlying ``serialized_name`` ZipFile
-    shape. Repalces the old ZipFile argument with an instance of
+    shape. Replaces the old ZipFile argument with an instance of
     ReplacedZipFileArgument to prevent its usage and recommend the new
     top-level injected parameter.
     """
@@ -90,11 +89,11 @@ def _should_contain_zip_content(value):
         # still try to load the contents as a zip file
         # to be absolutely sure.
         value = value.encode('utf-8')
-    fileobj = six.BytesIO(value)
+    fileobj = BytesIO(value)
     try:
         with closing(zipfile.ZipFile(fileobj)) as f:
             f.infolist()
-    except zipfile.BadZipfile:
+    except zipfile.BadZipFile:
         raise ValueError(ERROR_MSG)
 
 
@@ -104,7 +103,7 @@ class ZipFileArgument(CustomArgument):
     This class injects a ZipFile argument under the specified serialized_name
     parameter. This can be used to take a top level parameter like --zip-file
     and inject it into a nested different parameter like Code so
-    --zip-file foo.zip winds up being serilized as
+    --zip-file foo.zip winds up being serialized as
     { 'Code': { 'ZipFile': <contents of foo.zip> } }.
     """
     def __init__(self, *args, **kwargs):
@@ -123,7 +122,7 @@ class ZipFileArgument(CustomArgument):
 
 
 class ReplacedZipFileArgument(CLIArgument):
-    """A replacement arugment for nested ZipFile argument.
+    """A replacement argument for nested ZipFile argument.
 
     This prevents the use of a non-working nested argument that expects binary.
     Instead an instance of ZipFileArgument should be injected at the top level

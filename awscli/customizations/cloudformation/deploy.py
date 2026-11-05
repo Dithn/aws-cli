@@ -24,7 +24,8 @@ from awscli.customizations.cloudformation.yamlhelper import yaml_parse
 
 from awscli.customizations.commands import BasicCommand
 from awscli.compat import get_stdout_text_writer
-from awscli.utils import write_exception
+from awscli.customizations.utils import uni_print
+from awscli.utils import create_nested_client, write_exception, resolve_v2_debug_mode
 
 LOG = logging.getLogger(__name__)
 
@@ -170,6 +171,30 @@ class DeployCommand(BasicCommand):
             )
         },
         {
+            'name': 'disable-rollback',
+            'required': False,
+            'action': 'store_true',
+            'group_name': 'disable-rollback',
+            'dest': 'disable_rollback',
+            'default': False,
+            'help_text': (
+                'Preserve the state of previously provisioned resources when '
+                'the execute-change-set operation fails.'
+            )
+        },
+        {
+            'name': 'no-disable-rollback',
+            'required': False,
+            'action': 'store_false',
+            'group_name': 'disable-rollback',
+            'dest': 'disable_rollback',
+            'default': True,
+            'help_text': (
+                'Roll back all resource changes when the execute-change-set '
+                'operation fails.'
+            )
+        },
+        {
             'name': 'role-arn',
             'required': False,
             'help_text': (
@@ -200,9 +225,13 @@ class DeployCommand(BasicCommand):
             'dest': 'fail_on_empty_changeset',
             'default': True,
             'help_text': (
-                'Specify if the CLI should return a non-zero exit code if '
-                'there are no changes to be made to the stack. The default '
-                'behavior is to return a non-zero exit code.'
+                'Specify if the CLI should return a non-zero exit code '
+                'when there are no changes to be made to the stack. By '
+                'default, a non-zero exit code is returned, and this is '
+                'the same behavior that occurs when '
+                '`--fail-on-empty-changeset` is specified. If '
+                '`--no-fail-on-empty-changeset` is specified, then the '
+                'CLI will return a zero exit code.'
             )
         },
         {
@@ -239,8 +268,8 @@ class DeployCommand(BasicCommand):
 
     def _run_main(self, parsed_args, parsed_globals):
         cloudformation_client = \
-            self._session.create_client(
-                    'cloudformation', region_name=parsed_globals.region,
+            create_nested_client(
+                    self._session, 'cloudformation', region_name=parsed_globals.region,
                     endpoint_url=parsed_globals.endpoint_url,
                     verify=parsed_globals.verify_ssl)
 
@@ -272,7 +301,8 @@ class DeployCommand(BasicCommand):
 
         bucket = parsed_args.s3_bucket
         if bucket:
-            s3_client = self._session.create_client(
+            s3_client = create_nested_client(
+                self._session,
                 "s3",
                 config=Config(signature_version='s3v4'),
                 region_name=parsed_globals.region,
@@ -287,18 +317,33 @@ class DeployCommand(BasicCommand):
             s3_uploader = None
 
         deployer = Deployer(cloudformation_client)
+        v2_debug = resolve_v2_debug_mode(parsed_globals)
         return self.deploy(deployer, stack_name, template_str,
                            parameters, parsed_args.capabilities,
                            parsed_args.execute_changeset, parsed_args.role_arn,
                            parsed_args.notification_arns, s3_uploader,
-                           tags,
-                           parsed_args.fail_on_empty_changeset)
+                           tags, parsed_args.fail_on_empty_changeset,
+                           parsed_args.disable_rollback, v2_debug)
 
     def deploy(self, deployer, stack_name, template_str,
                parameters, capabilities, execute_changeset, role_arn,
                notification_arns, s3_uploader, tags,
-               fail_on_empty_changeset=True):
+               fail_on_empty_changeset=True, disable_rollback=False,
+               v2_debug=False):
         try:
+            if v2_debug and fail_on_empty_changeset:
+                uni_print(
+                    '\nAWS CLI v2 UPGRADE WARNING: In AWS CLI v2, deploying '
+                    'an AWS CloudFormation Template that results in an empty '
+                    'changeset will NOT result in an error by default. This '
+                    'is different from v1 behavior, where empty changesets '
+                    'result in an error by default. To migrate to v2 behavior '
+                    'and resolve this warning, you can add the '
+                    '`--no-fail-on-empty-changeset` flag to the command. '
+                    'See https://docs.aws.amazon.com/cli/latest/userguide/'
+                    'cliv2-migration-changes.html#cliv2-migration-cfn.\n',
+                    out_file=sys.stderr
+                )
             result = deployer.create_and_wait_for_changeset(
                 stack_name=stack_name,
                 cfn_template=template_str,
@@ -316,7 +361,8 @@ class DeployCommand(BasicCommand):
             return 0
 
         if execute_changeset:
-            deployer.execute_changeset(result.changeset_id, stack_name)
+            deployer.execute_changeset(result.changeset_id, stack_name,
+                                       disable_rollback)
             deployer.wait_for_execute(stack_name, result.changeset_type)
             sys.stdout.write(self.MSG_EXECUTE_SUCCESS.format(
                     stack_name=stack_name))

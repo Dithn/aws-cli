@@ -93,8 +93,8 @@ class BaseSync(object):
         that this method must return a Boolean as documented below.
 
         :type src_file: ``FileStat`` object
-        :param src_file: A representation of the opertaion that is to be
-            performed on a specfic file existing in the source.  Note if
+        :param src_file: A representation of the operation that is to be
+            performed on a specific file existing in the source.  Note if
             the file does not exist at the source, ``src_file`` is None.
 
         :type dest_file: ``FileStat`` object
@@ -253,4 +253,13 @@ class MissingFileSync(BaseSync):
     def determine_should_sync(self, src_file, dest_file):
         LOG.debug("syncing: %s -> %s, file does not exist at destination",
                   src_file.src, src_file.dest)
+        return True
+
+
+class AlwaysSync(BaseSync):
+    def __init__(self, sync_type='file_at_src_and_dest'):
+        super(AlwaysSync, self).__init__(sync_type)
+
+    def determine_should_sync(self, src_file, dest_file):
+        LOG.debug(f"syncing: {src_file.src} -> {src_file.dest}")
         return True

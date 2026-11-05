@@ -15,10 +15,10 @@ import logging
 import sys
 
 from botocore.client import Config
+from botocore.utils import is_s3express_bucket, ensure_boolean
 from dateutil.parser import parse
 from dateutil.tz import tzlocal
 
-from awscli.compat import six
 from awscli.compat import queue
 from awscli.customizations.commands import BasicCommand
 from awscli.customizations.s3.comparator import Comparator
@@ -30,12 +30,14 @@ from awscli.customizations.s3.filters import create_filter
 from awscli.customizations.s3.s3handler import S3TransferHandlerFactory
 from awscli.customizations.s3.utils import find_bucket_key, AppendFilter, \
     find_dest_path_comp_key, human_readable_size, \
-    RequestParamsMapper, split_s3_bucket_key, block_unsupported_resources
+    RequestParamsMapper, split_s3_bucket_key, block_unsupported_resources, \
+    S3PathResolver, is_account_regional_namespace_bucket
 from awscli.customizations.utils import uni_print
 from awscli.customizations.s3.syncstrategy.base import MissingFileSync, \
-    SizeAndLastModifiedSync, NeverSync
+    SizeAndLastModifiedSync, NeverSync, AlwaysSync
+from awscli.customizations.s3.syncstrategy.caseconflict import CaseConflictSync
 from awscli.customizations.s3 import transferconfig
-
+from awscli.utils import resolve_v2_debug_mode
 
 LOGGER = logging.getLogger(__name__)
 
@@ -249,12 +251,12 @@ SSE_C_COPY_SOURCE_KEY = {
 STORAGE_CLASS = {'name': 'storage-class',
                  'choices': ['STANDARD', 'REDUCED_REDUNDANCY', 'STANDARD_IA',
                              'ONEZONE_IA', 'INTELLIGENT_TIERING', 'GLACIER',
-                             'DEEP_ARCHIVE'],
+                             'DEEP_ARCHIVE', 'GLACIER_IR'],
                  'help_text': (
                      "The type of storage to use for the object. "
                      "Valid choices are: STANDARD | REDUCED_REDUNDANCY "
                      "| STANDARD_IA | ONEZONE_IA | INTELLIGENT_TIERING "
-                     "| GLACIER | DEEP_ARCHIVE. "
+                     "| GLACIER | DEEP_ARCHIVE | GLACIER_IR. "
                      "Defaults to 'STANDARD'")}
 
 
@@ -429,6 +431,97 @@ REQUEST_PAYER = {
     )
 }
 
+VALIDATE_SAME_S3_PATHS = {
+    'name': 'validate-same-s3-paths', 'action': 'store_true',
+    'help_text': (
+        'Resolves the source and destination S3 URIs to their '
+        'underlying buckets and verifies that the file or object '
+        'is not being moved onto itself. If you are using any type '
+        'of access point ARNs or access point aliases in your S3 URIs, '
+        'we strongly recommended using this parameter to help prevent '
+        'accidental deletions of the source file or object. This '
+        'parameter resolves the underlying buckets of S3 access point '
+        'ARNs and aliases, S3 on Outposts access point ARNs, and '
+        'Multi-Region Access Point ARNs. S3 on Outposts access point '
+        'aliases are not supported. Instead of using this parameter, '
+        'you can set the environment variable '
+        '``AWS_CLI_S3_MV_VALIDATE_SAME_S3_PATHS`` to ``true``. '
+        'NOTE: Path validation requires making additional API calls. '
+        'Future updates to this path-validation mechanism might change '
+        'which API calls are made.'
+    )
+}
+
+CHECKSUM_MODE = {
+        'name': 'checksum-mode', 'choices': ['ENABLED'],
+        'help_text': 'To retrieve the checksum, this mode must be enabled. If the object has a '
+                     'checksum, it will be verified.'
+}
+
+CHECKSUM_ALGORITHM = {
+        'name': 'checksum-algorithm', 'choices': ['CRC64NVME', 'CRC32', 'SHA256', 'SHA1', 'CRC32C', 'SHA512', 'XXHASH64', 'XXHASH3', 'XXHASH128'],
+        'help_text': 'Indicates the algorithm used to create the checksum for the object.'
+}
+
+BUCKET_NAME_PREFIX = {
+    'name': 'bucket-name-prefix',
+    'help_text': (
+        'Limits the response to bucket names that begin with the specified '
+        'bucket name prefix.'
+    )
+}
+
+BUCKET_REGION = {
+    'name': 'bucket-region',
+    'help_text': (
+        'Limits the response to buckets that are located in the specified '
+        'Amazon Web Services Region. The Amazon Web Services Region must be '
+        'expressed according to the Amazon Web Services Region code, such as '
+        'us-west-2 for the US West (Oregon) Region. For a list of the valid '
+        'values for all of the Amazon Web Services Regions, see '
+        'https://docs.aws.amazon.com/general/latest/gr/rande.html#s3_region'
+    )
+}
+
+TAGS = {
+    'name': 'tags',
+    'synopsis': '--tags <key> <value>',
+    'action': 'append',
+    'nargs': 2,
+    'help_text': (
+        'This flag specifies tags to be added to the bucket in the format of '
+        '``--tags key value``. You can specify this flag multiple times, '
+        'once for each tag.'
+    ),
+}
+
+CASE_CONFLICT = {
+    'name': 'case-conflict',
+    'choices': [
+         'ignore',
+         'skip',
+         'warn',
+         'error',
+    ],
+    'default': 'ignore',
+    'help_text': (
+         "Configures behavior when attempting to download multiple objects "
+         "whose keys differ only by case, which can cause undefined behavior "
+         "on case-insensitive filesystems. "
+         "This parameter only applies for commands that perform multiple S3 "
+         "to local downloads. "
+         f"See <a href='{CaseConflictSync.DOC_URI}'>Handling case "
+         "conflicts</a> for details. Valid values are: "
+         "<ul>"
+         "<li>``error`` - Raise an error and abort downloads.</li>"
+         "<li>``warn`` - Emit a warning and download the object.</li>"
+         "<li>``skip`` - Skip downloading the object.</li>"
+         "<li>``ignore`` - The default value. Ignore the conflict and "
+         "download the object.</li>"
+         "</ul>"
+    ),
+ }
+
 TRANSFER_ARGS = [DRYRUN, QUIET, INCLUDE, EXCLUDE, ACL,
                  FOLLOW_SYMLINKS, NO_FOLLOW_SYMLINKS, NO_GUESS_MIME_TYPE,
                  SSE, SSE_C, SSE_C_KEY, SSE_KMS_KEY_ID, SSE_C_COPY_SOURCE,
@@ -437,7 +530,7 @@ TRANSFER_ARGS = [DRYRUN, QUIET, INCLUDE, EXCLUDE, ACL,
                  CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LANGUAGE,
                  EXPIRES, SOURCE_REGION, ONLY_SHOW_ERRORS, NO_PROGRESS,
                  PAGE_SIZE, IGNORE_GLACIER_WARNINGS, FORCE_GLACIER_TRANSFER,
-                 REQUEST_PAYER]
+                 REQUEST_PAYER, CHECKSUM_MODE, CHECKSUM_ALGORITHM]
 
 
 def get_client(session, region, endpoint_url, verify, config=None):
@@ -461,7 +554,8 @@ class ListCommand(S3Command):
     USAGE = "<S3Uri> or NONE"
     ARG_TABLE = [{'name': 'paths', 'nargs': '?', 'default': 's3://',
                   'positional_arg': True, 'synopsis': USAGE}, RECURSIVE,
-                 PAGE_SIZE, HUMAN_READABLE, SUMMARIZE, REQUEST_PAYER]
+                 PAGE_SIZE, HUMAN_READABLE, SUMMARIZE, REQUEST_PAYER,
+                 BUCKET_NAME_PREFIX, BUCKET_REGION]
 
     def _run_main(self, parsed_args, parsed_globals):
         super(ListCommand, self)._run_main(parsed_args, parsed_globals)
@@ -475,7 +569,11 @@ class ListCommand(S3Command):
             path = path[5:]
         bucket, key = find_bucket_key(path)
         if not bucket:
-            self._list_all_buckets()
+            self._list_all_buckets(
+                parsed_args.page_size,
+                parsed_args.bucket_name_prefix,
+                parsed_args.bucket_region,
+            )
         elif parsed_args.dir_op:
             # Then --recursive was specified.
             self._list_all_objects_recursive(
@@ -539,13 +637,30 @@ class ListCommand(S3Command):
             uni_print(print_str)
         self._at_first_page = False
 
-    def _list_all_buckets(self):
-        response_data = self.client.list_buckets()
-        buckets = response_data['Buckets']
-        for bucket in buckets:
-            last_mod_str = self._make_last_mod_str(bucket['CreationDate'])
-            print_str = last_mod_str + ' ' + bucket['Name'] + '\n'
-            uni_print(print_str)
+    def _list_all_buckets(
+            self,
+            page_size=None,
+            prefix=None,
+            bucket_region=None,
+    ):
+        paginator = self.client.get_paginator('list_buckets')
+        paging_args = {
+            'PaginationConfig': {'PageSize': page_size}
+        }
+        if prefix:
+            paging_args['Prefix'] = prefix
+        if bucket_region:
+            paging_args['BucketRegion'] = bucket_region
+
+        iterator = paginator.paginate(**paging_args)
+
+        for response_data in iterator:
+            buckets = response_data.get('Buckets', [])
+
+            for bucket in buckets:
+                last_mod_str = self._make_last_mod_str(bucket['CreationDate'])
+                print_str = last_mod_str + ' ' + bucket['Name'] + '\n'
+                uni_print(print_str)
 
     def _list_all_objects_recursive(self, bucket, key, page_size=None,
                                     request_payer=None):
@@ -636,7 +751,7 @@ class WebsiteCommand(S3Command):
         # bucketname
         #
         # We also strip off the trailing slash if a user
-        # accidently appends a slash.
+        # accidentally appends a slash.
         if path.startswith('s3://'):
             path = path[5:]
         if path.endswith('/'):
@@ -652,6 +767,22 @@ class PresignCommand(S3Command):
         "anyone who receives the pre-signed URL to retrieve the S3 object "
         "with an HTTP GET request. For sigv4 requests the region needs to be "
         "configured explicitly."
+        "\n\n"
+        ".. warning::\n"
+        "\n"
+        "    For backwards compatibility, S3 pre-signed URLs use Signature\n"
+        "    Version 2 by default in regions where S3 supports it. As a\n"
+        "    result, query parameters appended to the URL after it is\n"
+        "    generated are not covered by the signature, and can be added,\n"
+        "    changed, or removed by anyone holding the URL without\n"
+        "    invalidating it.\n"
+        "\n"
+        "    To use Signature Version 4 instead, add an ``s3`` section to\n"
+        "    your profile in the AWS CLI configuration file::\n"
+        "\n"
+        "        [profile my-profile]\n"
+        "        s3 =\n"
+        "            signature_version = s3v4\n"
     )
     USAGE = "<S3Uri>"
     ARG_TABLE = [{'name': 'path',
@@ -684,12 +815,15 @@ class S3TransferCommand(S3Command):
         self._convert_path_args(parsed_args)
         params = self._build_call_parameters(parsed_args, {})
         cmd_params = CommandParameters(self.NAME, params,
-                                       self.USAGE)
+                                       self.USAGE,
+                                       self._session,
+                                       parsed_globals)
         cmd_params.add_region(parsed_globals)
         cmd_params.add_endpoint_url(parsed_globals)
         cmd_params.add_verify_ssl(parsed_globals)
         cmd_params.add_page_size(parsed_args)
         cmd_params.add_paths(parsed_args.paths)
+        cmd_params.add_v2_debug(parsed_globals)
 
         runtime_config = transferconfig.RuntimeConfig().build_config(
             **self._session.get_scoped_config().get('s3', {}))
@@ -714,7 +848,7 @@ class S3TransferCommand(S3Command):
             parsed_args.paths = [parsed_args.paths]
         for i in range(len(parsed_args.paths)):
             path = parsed_args.paths[i]
-            if isinstance(path, six.binary_type):
+            if isinstance(path, bytes):
                 dec_path = path.decode(sys.getfilesystemencoding())
                 enc_path = dec_path.encode('utf-8')
                 new_path = enc_path.decode('utf-8')
@@ -729,18 +863,20 @@ class CpCommand(S3TransferCommand):
             "or <S3Uri> <S3Uri>"
     ARG_TABLE = [{'name': 'paths', 'nargs': 2, 'positional_arg': True,
                   'synopsis': USAGE}] + TRANSFER_ARGS + \
-                [METADATA, METADATA_DIRECTIVE, EXPECTED_SIZE, RECURSIVE]
+                [METADATA, METADATA_DIRECTIVE, EXPECTED_SIZE, RECURSIVE,
+                 CASE_CONFLICT]
 
 
 class MvCommand(S3TransferCommand):
     NAME = 'mv'
-    DESCRIPTION = "Moves a local file or S3 object to " \
-                  "another location locally or in S3."
+    DESCRIPTION = BasicCommand.FROM_FILE('s3', 'mv', '_description.rst')
     USAGE = "<LocalPath> <S3Uri> or <S3Uri> <LocalPath> " \
             "or <S3Uri> <S3Uri>"
     ARG_TABLE = [{'name': 'paths', 'nargs': 2, 'positional_arg': True,
                   'synopsis': USAGE}] + TRANSFER_ARGS +\
-                [METADATA, METADATA_DIRECTIVE, RECURSIVE]
+                [METADATA, METADATA_DIRECTIVE, RECURSIVE, VALIDATE_SAME_S3_PATHS,
+                 CASE_CONFLICT]
+
 
 class RmCommand(S3TransferCommand):
     NAME = 'rm'
@@ -761,14 +897,20 @@ class SyncCommand(S3TransferCommand):
             "<LocalPath> or <S3Uri> <S3Uri>"
     ARG_TABLE = [{'name': 'paths', 'nargs': 2, 'positional_arg': True,
                   'synopsis': USAGE}] + TRANSFER_ARGS + \
-                [METADATA, METADATA_DIRECTIVE]
+                [METADATA, METADATA_DIRECTIVE, CASE_CONFLICT]
 
 
 class MbCommand(S3Command):
     NAME = 'mb'
     DESCRIPTION = "Creates an S3 bucket."
     USAGE = "<S3Uri>"
-    ARG_TABLE = [{'name': 'path', 'positional_arg': True, 'synopsis': USAGE}]
+    ARG_TABLE = [
+        {
+            'name': 'path',
+            'positional_arg': True,
+            'synopsis': USAGE,
+        }
+    ] + [TAGS]
 
     def _run_main(self, parsed_args, parsed_globals):
         super(MbCommand, self)._run_main(parsed_args, parsed_globals)
@@ -777,9 +919,23 @@ class MbCommand(S3Command):
             raise TypeError("%s\nError: Invalid argument type" % self.USAGE)
         bucket, _ = split_s3_bucket_key(parsed_args.path)
 
-        bucket_config = {'LocationConstraint': self.client.meta.region_name}
+        if is_s3express_bucket(bucket):
+            raise ValueError("Cannot use mb command with a directory bucket.")
+
         params = {'Bucket': bucket}
+        bucket_config = {}
+        bucket_tags = self._create_bucket_tags(parsed_args)
+
+        if is_account_regional_namespace_bucket(bucket):
+            params['BucketNamespace'] = 'account-regional'
+
+        # Only set LocationConstraint when the region name is not us-east-1.
+        # Sending LocationConstraint with value us-east-1 results in an error.
         if self.client.meta.region_name != 'us-east-1':
+            bucket_config['LocationConstraint'] = self.client.meta.region_name
+        if bucket_tags:
+            bucket_config['Tags'] = bucket_tags
+        if bucket_config:
             params['CreateBucketConfiguration'] = bucket_config
 
         # TODO: Consolidate how we handle return codes and errors
@@ -793,6 +949,11 @@ class MbCommand(S3Command):
                 sys.stderr
             )
             return 1
+
+    def _create_bucket_tags(self, parsed_args):
+        if parsed_args.tags is not None:
+            return [{'Key': tag[0], 'Value': tag[1]} for tag in parsed_args.tags]
+        return []
 
 
 class RbCommand(S3Command):
@@ -923,7 +1084,16 @@ class CommandArchitecture(object):
         # Set the default strategies.
         sync_strategies['file_at_src_and_dest_sync_strategy'] = \
             SizeAndLastModifiedSync()
-        sync_strategies['file_not_at_dest_sync_strategy'] = MissingFileSync()
+        if self._should_handle_case_conflicts():
+            sync_strategies['file_not_at_dest_sync_strategy'] = (
+                CaseConflictSync(
+                    on_case_conflict=self.parameters['case_conflict']
+                )
+            )
+        else:
+            sync_strategies['file_not_at_dest_sync_strategy'] = (
+                MissingFileSync()
+            )
         sync_strategies['file_not_at_src_sync_strategy'] = NeverSync()
 
         # Determine what strategies to override if any.
@@ -975,6 +1145,45 @@ class CommandArchitecture(object):
         }
         result_queue = queue.Queue()
         operation_name = cmd_translation[paths_type]
+
+        if self.parameters['v2_debug']:
+            if operation_name == 'copy':
+                uni_print(
+                    '\nAWS CLI v2 UPGRADE WARNING: In AWS CLI v2, object '
+                    'properties will be copied from the source in multipart '
+                    'copies between S3 buckets initiated via `aws s3` '
+                    'commands, resulting in additional S3 API calls to '
+                    'transfer the metadata. Note that the principal must '
+                    'have permission to call these APIs, or the command may '
+                    'fail. This is different from v1 behavior, where metadata '
+                    'is not copied. For guidance on retaining v1 behavior in '
+                    'AWS CLI v2, or for more details, see '
+                    'https://docs.aws.amazon.com/cli/latest/userguide/'
+                    'cliv2-migration-changes.html'
+                    '#cliv2-migration-s3-copy-metadata.\n\n',
+                    out_file=sys.stderr
+                )
+            elif (
+                operation_name == 'upload'
+                and self.parameters.get('checksum_algorithm') is None
+                and self.session.get_config_variable(
+                    'request_checksum_calculation'
+                ) == 'when_supported'
+            ):
+                uni_print(
+                    '\nAWS CLI v2 UPGRADE WARNING: In AWS CLI v2, for '
+                    '`aws s3` commands that upload a file to an S3 bucket, '
+                    'Cyclic Redundancy Check 64 (CRC64NVME) will be used to '
+                    'compute object checksums by default and included in '
+                    'the request. This is different from v1 behavior, where '
+                    'Cyclic Redundancy Check 32 (CRC32) checksums '
+                    'are used. For guidance on retaining v1 behavior '
+                    'in AWS CLI v2, or for more details, see '
+                    'https://docs.aws.amazon.com/cli/latest/userguide/'
+                    'cliv2-migration-changes.html'
+                    '#cliv2-migration-checksums.\n\n',
+                    out_file=sys.stderr
+                )
 
         fgen_kwargs = {
             'client': self._source_client, 'operation_name': operation_name,
@@ -1039,6 +1248,12 @@ class CommandArchitecture(object):
                             'filters': [create_filter(self.parameters)],
                             'file_info_builder': [file_info_builder],
                             's3_handler': [s3_transfer_handler]}
+            if self._should_handle_case_conflicts():
+                self._handle_case_conflicts(
+                    command_dict,
+                    rev_files,
+                    rev_generator,
+                )
         elif self.cmd == 'rm':
             command_dict = {'setup': [files],
                             'file_generator': [file_generator],
@@ -1051,6 +1266,12 @@ class CommandArchitecture(object):
                             'filters': [create_filter(self.parameters)],
                             'file_info_builder': [file_info_builder],
                             's3_handler': [s3_transfer_handler]}
+            if self._should_handle_case_conflicts():
+                self._handle_case_conflicts(
+                    command_dict,
+                    rev_files,
+                    rev_generator,
+                )
 
         files = command_dict['setup']
         while self.instructions:
@@ -1100,21 +1321,90 @@ class CommandArchitecture(object):
         )
 
     def _map_sse_c_params(self, request_parameters, paths_type):
-        # SSE-C may be neaded for HeadObject for copies/downloads/deletes
+        # SSE-C may be needed for HeadObject for copies/downloads/deletes
         # If the operation is s3 to s3, the FileGenerator should use the
         # copy source key and algorithm. Otherwise, use the regular
         # SSE-C key and algorithm. Note the reverse FileGenerator does
         # not need any of these because it is used only for sync operations
         # which only use ListObjects which does not require HeadObject.
-        RequestParamsMapper.map_head_object_params(
-            request_parameters['HeadObject'], self.parameters)
         if paths_type == 's3s3':
-            RequestParamsMapper.map_head_object_params(
-                request_parameters['HeadObject'], {
-                    'sse_c': self.parameters.get('sse_c_copy_source'),
-                    'sse_c_key': self.parameters.get('sse_c_copy_source_key')
-                }
+            RequestParamsMapper.map_head_object_params_with_copy_source_sse(
+                request_parameters['HeadObject'],
+                self.parameters,
             )
+        else:
+            RequestParamsMapper.map_head_object_params(
+                request_parameters['HeadObject'],
+                self.parameters,
+            )
+
+    def _should_handle_case_conflicts(self):
+        return (
+                self.cmd in {'sync', 'cp', 'mv'}
+                and self.parameters.get('paths_type') == 's3local'
+                and self.parameters['case_conflict'] != 'ignore'
+                and self.parameters.get('dir_op')
+        )
+
+    def _handle_case_conflicts(self, command_dict, rev_files, rev_generator):
+        # Objects are not returned in lexicographical order when
+        # operated on S3 Express directory buckets. This is required
+        # for sync operations to behave correctly, which is what
+        # recursive copies and moves fall back to so potential case
+        # conflicts can be detected and handled.
+        if not is_s3express_bucket(
+                split_s3_bucket_key(self.parameters['src'])[0]
+        ):
+            self._modify_instructions_for_case_conflicts(
+                command_dict, rev_files, rev_generator
+            )
+            return
+        # `skip` and `error` are not valid choices in this case because
+        # it's not possible to detect case conflicts.
+        if self.parameters['case_conflict'] not in {'ignore', 'warn'}:
+            raise ValueError(
+                f"`{self.parameters['case_conflict']}` is not a valid value "
+                "for `--case-conflict` when operating on S3 Express "
+                "directory buckets. Valid values: `warn`, `ignore`."
+            )
+        msg = (
+            "warning: Recursive copies/moves from an S3 Express "
+            "directory bucket to a case-insensitive local filesystem "
+            "may result in undefined behavior if there are "
+            "S3 object key names that differ only by case. To disable "
+            "this warning, set the `--case-conflict` parameter to `ignore`. "
+            f"For more information, see {CaseConflictSync.DOC_URI}."
+        )
+        uni_print(msg, sys.stderr)
+
+    def _modify_instructions_for_case_conflicts(
+            self, command_dict, rev_files, rev_generator
+    ):
+        # Command will perform recursive S3 to local downloads.
+        # Checking for potential case conflicts requires knowledge
+        # of local files. Instead of writing a separate validation
+        # mechanism for recursive downloads, we modify the instructions
+        # to mimic a sync command.
+        sync_strategies = {
+            # Local filename exists with exact case match. Always sync
+            # because it's a copy operation.
+            'file_at_src_and_dest_sync_strategy': AlwaysSync(),
+            # Local filename either doesn't exist or differs only by case.
+            # Let `CaseConflictSync` determine which it is and handle it
+            # according to configured `--case-conflict` parameter.
+            'file_not_at_dest_sync_strategy': CaseConflictSync(
+                on_case_conflict=self.parameters['case_conflict']
+            ),
+            # Copy is one-way so never sync if not at source.
+            'file_not_at_src_sync_strategy': NeverSync(),
+        }
+        command_dict['setup'].append(rev_files)
+        command_dict['file_generator'].append(rev_generator)
+        command_dict['filters'].append(create_filter(self.parameters))
+        command_dict['comparator'] = [Comparator(**sync_strategies)]
+        self.instructions.insert(
+            self.instructions.index('file_info_builder'), 'comparator'
+        )
 
 
 class CommandParameters(object):
@@ -1122,7 +1412,8 @@ class CommandParameters(object):
     This class is used to do some initial error based on the
     parameters and arguments passed to the command line.
     """
-    def __init__(self, cmd, parameters, usage):
+    def __init__(self, cmd, parameters, usage,
+                 session=None, parsed_globals=None):
         """
         Stores command name and parameters.  Ensures that the ``dir_op`` flag
         is true if a certain command is being used.
@@ -1135,6 +1426,8 @@ class CommandParameters(object):
         self.cmd = cmd
         self.parameters = parameters
         self.usage = usage
+        self._session = session
+        self._parsed_globals = parsed_globals
         if 'dir_op' not in parameters:
             self.parameters['dir_op'] = False
         if 'follow_symlinks' not in parameters:
@@ -1166,6 +1459,21 @@ class CommandParameters(object):
         self._validate_streaming_paths()
         self._validate_path_args()
         self._validate_sse_c_args()
+        self._validate_not_s3_express_bucket_for_sync()
+
+    def _validate_not_s3_express_bucket_for_sync(self):
+        if self.cmd == 'sync' and \
+            (self._is_s3express_path(self.parameters['src']) or
+             self._is_s3express_path(self.parameters['dest'])):
+            raise ValueError(
+                "Cannot use sync command with a directory bucket."
+            )
+
+    def _is_s3express_path(self, path):
+        if path.startswith("s3://"):
+            bucket = split_s3_bucket_key(path)[0]
+            return is_s3express_bucket(bucket)
+        return False
 
     def _validate_streaming_paths(self):
         self.parameters['is_stream'] = False
@@ -1182,9 +1490,23 @@ class CommandParameters(object):
     def _validate_path_args(self):
         # If we're using a mv command, you can't copy the object onto itself.
         params = self.parameters
-        if self.cmd == 'mv' and self._same_path(params['src'], params['dest']):
-            raise ValueError("Cannot mv a file onto itself: '%s' - '%s'" % (
-                params['src'], params['dest']))
+        if self.cmd == 'mv' and params['paths_type']=='s3s3':
+            self._raise_if_mv_same_paths(params['src'], params['dest'])
+            if self._should_validate_same_underlying_s3_paths():
+                self._validate_same_underlying_s3_paths()
+            if self._should_emit_validate_s3_paths_warning():
+                self._emit_validate_s3_paths_warning()
+
+        if params.get('checksum_algorithm'):
+            self._raise_if_paths_type_incorrect_for_param(
+                CHECKSUM_ALGORITHM['name'],
+                params['paths_type'],
+                ['locals3', 's3s3'])
+        if params.get('checksum_mode'):
+            self._raise_if_paths_type_incorrect_for_param(
+                CHECKSUM_MODE['name'],
+                params['paths_type'],
+                ['s3local'])
 
         # If the user provided local path does not exist, hard fail because
         # we know that we will not be able to upload the file.
@@ -1208,6 +1530,79 @@ class CommandParameters(object):
         elif dest.endswith('/'):
             src_base = os.path.basename(src)
             return src == os.path.join(dest, src_base)
+
+    def _same_key(self, src, dest):
+        _, src_key = split_s3_bucket_key(src)
+        _, dest_key = split_s3_bucket_key(dest)
+        return self._same_path(f'/{src_key}', f'/{dest_key}')
+
+    def _validate_same_s3_paths_enabled(self):
+        validate_env_var = ensure_boolean(
+            os.environ.get('AWS_CLI_S3_MV_VALIDATE_SAME_S3_PATHS'))
+        return (self.parameters.get('validate_same_s3_paths') or
+                validate_env_var)
+
+    def _should_emit_validate_s3_paths_warning(self):
+        is_same_key = self._same_key(
+            self.parameters['src'], self.parameters['dest'])
+        src_has_underlying_path = S3PathResolver.has_underlying_s3_path(
+            self.parameters['src'])
+        dest_has_underlying_path = S3PathResolver.has_underlying_s3_path(
+            self.parameters['dest'])
+        return (is_same_key and not self._validate_same_s3_paths_enabled() and
+                (src_has_underlying_path or dest_has_underlying_path))
+
+    def _emit_validate_s3_paths_warning(self):
+        msg = (
+            "warning: Provided s3 paths may resolve to same underlying "
+            "s3 object(s) and result in deletion instead of being moved. "
+            "To resolve and validate underlying s3 paths are not the same, "
+            "specify the --validate-same-s3-paths flag or set the "
+            "AWS_CLI_S3_MV_VALIDATE_SAME_S3_PATHS environment variable to true. "
+            "To resolve s3 outposts access point path, the arn must be "
+            "used instead of the alias.\n"
+        )
+        uni_print(msg, sys.stderr)
+
+    def _should_validate_same_underlying_s3_paths(self):
+        is_same_key = self._same_key(
+            self.parameters['src'], self.parameters['dest'])
+        return is_same_key and self._validate_same_s3_paths_enabled()
+
+    def _validate_same_underlying_s3_paths(self):
+        src_paths = S3PathResolver.from_session(
+            self._session,
+            self.parameters.get('source_region', self._parsed_globals.region),
+            self._parsed_globals.verify_ssl
+        ).resolve_underlying_s3_paths(self.parameters['src'])
+        dest_paths = S3PathResolver.from_session(
+            self._session,
+            self._parsed_globals.region,
+            self._parsed_globals.verify_ssl
+        ).resolve_underlying_s3_paths(self.parameters['dest'])
+        for src_path in src_paths:
+            for dest_path in dest_paths:
+                self._raise_if_mv_same_paths(src_path, dest_path)
+
+    def _raise_if_mv_same_paths(self, src, dest):
+        if self._same_path(src, dest):
+            raise ValueError(
+                "Cannot mv a file onto itself: "
+                f"{self.parameters['src']} - {self.parameters['dest']}"
+            )
+
+    def _raise_if_paths_type_incorrect_for_param(self, param, paths_type, allowed_paths):
+        if paths_type not in allowed_paths:
+            expected_usage_map = {
+                'locals3': '<LocalPath> <S3Uri>',
+                's3s3': '<S3Uri> <S3Uri>',
+                's3local': '<S3Uri> <LocalPath>',
+                's3': '<S3Uri>'
+            }
+            raise ValueError(
+                f"Expected {param} parameter to be used with one of following path formats: "
+                f"{', '.join([expected_usage_map[path] for path in allowed_paths])}. Instead, received {expected_usage_map[paths_type]}."
+            )
 
     def _normalize_s3_trailing_slash(self, paths):
         for i, path in enumerate(paths):
@@ -1261,6 +1656,9 @@ class CommandParameters(object):
 
     def add_page_size(self, parsed_args):
         self.parameters['page_size'] = getattr(parsed_args, 'page_size', None)
+
+    def add_v2_debug(self, parsed_globals):
+        self.parameters['v2_debug'] = resolve_v2_debug_mode(parsed_globals)
 
     def _validate_sse_c_args(self):
         self._validate_sse_c_arg()

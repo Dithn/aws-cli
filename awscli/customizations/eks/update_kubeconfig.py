@@ -26,15 +26,15 @@ from awscli.customizations.eks.kubeconfig import (Kubeconfig,
                                                   KubeconfigValidator,
                                                   KubeconfigAppender)
 from awscli.customizations.eks.ordered_yaml import ordered_yaml_dump
+from awscli.utils import create_nested_client
 
 LOG = logging.getLogger(__name__)
 
 DEFAULT_PATH = os.path.expanduser("~/.kube/config")
 
-# Use the endpoint for kubernetes 1.10
-# To get the most recent endpoint we will need to
-# Do a check on the cluster's version number
-API_VERSION = "client.authentication.k8s.io/v1alpha1"
+# At the time EKS no longer supports Kubernetes v1.21 (probably ~Dec 2023),
+# this can be safely changed to default to writing "v1"
+API_VERSION = "client.authentication.k8s.io/v1beta1"
 
 class UpdateKubeconfigCommand(BasicCommand):
     NAME = 'update-kubeconfig'
@@ -48,6 +48,7 @@ class UpdateKubeconfigCommand(BasicCommand):
     ARG_TABLE = [
         {
             'name': 'name',
+            'dest': 'cluster_name',
             'help_text': ("The name of the cluster for which "
                           "to create a kubeconfig entry. "
                           "This cluster must exist in your account and in the "
@@ -77,6 +78,12 @@ class UpdateKubeconfigCommand(BasicCommand):
             'required': False
         },
         {
+            'name': 'proxy-url',
+            'help_text': ("Optionally specify a proxy url to route "
+                          "traffic via when connecting to a cluster."),
+            'required': False
+        },
+        {
             'name': 'dry-run',
             'action': 'store_true',
             'default': False,
@@ -97,6 +104,20 @@ class UpdateKubeconfigCommand(BasicCommand):
             'help_text': ("Alias for the cluster context name. "
                           "Defaults to match cluster ARN."),
             'required': False
+        },
+        {
+            'name': 'user-alias',
+            'help_text': ("Alias for the generated user name. "
+                          "Defaults to match cluster ARN."),
+            'required': False
+        },
+        {
+            'name': 'assume-role-arn',
+            'help_text': ('To assume a role for retrieving cluster information, '
+                         'specify an IAM role ARN with this option. '
+                         'Use this for cross-account access to get cluster details '
+                         'from the account where the cluster resides.'),
+            'required': False
         }
     ]
 
@@ -114,11 +135,10 @@ class UpdateKubeconfigCommand(BasicCommand):
 
     def _run_main(self, parsed_args, parsed_globals):
         client = EKSClient(self._session,
-                           parsed_args.name,
-                           parsed_args.role_arn,
-                           parsed_globals)
+                           parsed_args=parsed_args,
+                           parsed_globals=parsed_globals)
         new_cluster_dict = client.get_cluster_entry()
-        new_user_dict = client.get_user_entry()
+        new_user_dict = client.get_user_entry(user_alias=parsed_args.user_alias)
 
         config_selector = KubeconfigSelector(
             os.environ.get("KUBECONFIG", ""),
@@ -230,40 +250,56 @@ class KubeconfigSelector(object):
 
 
 class EKSClient(object):
-    def __init__(self, session, cluster_name, role_arn, parsed_globals=None):
+    def __init__(self, session, parsed_args, parsed_globals=None):
         self._session = session
-        self._cluster_name = cluster_name
-        self._role_arn = role_arn
+        self._cluster_name = parsed_args.cluster_name
         self._cluster_description = None
-        self._globals = parsed_globals
+        self._parsed_globals = parsed_globals
+        self._parsed_args = parsed_args
 
-    def _get_cluster_description(self):
+    @property
+    def cluster_description(self):
         """
         Use an eks describe-cluster call to get the cluster description
         Cache the response in self._cluster_description.
         describe-cluster will only be called once.
         """
-        if self._cluster_description is None:
-            if self._globals is None:
-                client = self._session.create_client("eks")
-            else:
-                client = self._session.create_client(
-                    "eks",
-                    region_name=self._globals.region,
-                    endpoint_url=self._globals.endpoint_url,
-                    verify=self._globals.verify_ssl
-                )
-            full_description = client.describe_cluster(name=self._cluster_name)
-            self._cluster_description = full_description["cluster"]
+        if self._cluster_description is not None:
+            return self._cluster_description
 
-            if "status" not in self._cluster_description:
-                raise EKSClusterError("Cluster not found")
-            if self._cluster_description["status"] not in ["ACTIVE", "UPDATING"]:
-                raise EKSClusterError("Cluster status is {0}".format(
-                    self._cluster_description["status"]
-                ))
+        client_kwargs = {}
+        if self._parsed_globals:
+            client_kwargs.update({
+                "region_name": self._parsed_globals.region,
+                "endpoint_url": self._parsed_globals.endpoint_url,
+                "verify": self._parsed_globals.verify_ssl,
+            })
 
-        return self._cluster_description
+        # Handle role assumption if needed
+        if getattr(self._parsed_args, 'assume_role_arn', None):
+            sts_client = create_nested_client(self._session, 'sts')
+            credentials = sts_client.assume_role(
+                RoleArn=self._parsed_args.assume_role_arn,
+                RoleSessionName='EKSDescribeClusterSession'
+            )["Credentials"]
+
+            client_kwargs.update({
+                "aws_access_key_id": credentials["AccessKeyId"],
+                "aws_secret_access_key": credentials["SecretAccessKey"],
+                "aws_session_token": credentials["SessionToken"],
+            })
+
+        client = create_nested_client(self._session, "eks", **client_kwargs)
+        full_description = client.describe_cluster(name=self._cluster_name)
+        cluster = full_description.get("cluster")
+
+        if not cluster or "status" not in cluster:
+            raise EKSClusterError("Cluster not found")
+        if cluster["status"] not in ["ACTIVE", "UPDATING"]:
+            raise EKSClusterError(f"Cluster status is {cluster['status']}")
+
+        self._cluster_description = cluster
+        return cluster
 
     def get_cluster_entry(self):
         """
@@ -271,12 +307,11 @@ class EKSClient(object):
         the previously obtained description.
         """
 
-        cert_data = self._get_cluster_description().get("certificateAuthority",
-                                                        {"data": ""})["data"]
-        endpoint = self._get_cluster_description().get("endpoint")
-        arn = self._get_cluster_description().get("arn")
+        cert_data = self.cluster_description.get("certificateAuthority", {}).get("data", "")
+        endpoint = self.cluster_description.get("endpoint")
+        arn = self.cluster_description.get("arn")
 
-        return OrderedDict([
+        generated_cluster = OrderedDict([
             ("cluster", OrderedDict([
                 ("certificate-authority-data", cert_data),
                 ("server", endpoint)
@@ -284,16 +319,32 @@ class EKSClient(object):
             ("name", arn)
         ])
 
-    def get_user_entry(self):
+        if self._parsed_args.proxy_url is not None:
+            generated_cluster["cluster"]["proxy-url"] = self._parsed_args.proxy_url
+
+        return generated_cluster
+
+    def get_user_entry(self, user_alias=None):
         """
         Return a user entry generated using
         the previously obtained description.
         """
+        region = self.cluster_description.get("arn").split(":")[3]
+        outpost_config = self.cluster_description.get("outpostConfig")
 
-        region = self._get_cluster_description().get("arn").split(":")[3]
+        if (
+            outpost_config is None
+            or outpost_config.get("etcdInstanceType") is not None
+        ):
+            cluster_identification_parameter = "--cluster-name"
+            cluster_identification_value = self._cluster_name
+        else:
+            # If cluster contains outpostConfig and does not have etcdInstanceType, use id for identification
+            cluster_identification_parameter = "--cluster-id"
+            cluster_identification_value = self.cluster_description.get("id")
 
         generated_user = OrderedDict([
-            ("name", self._get_cluster_description().get("arn", "")),
+            ("name", user_alias or self.cluster_description.get("arn", "")),
             ("user", OrderedDict([
                 ("exec", OrderedDict([
                     ("apiVersion", API_VERSION),
@@ -303,18 +354,20 @@ class EKSClient(object):
                             region,
                             "eks",
                             "get-token",
-                            "--cluster-name",
-                            self._cluster_name,
+                            cluster_identification_parameter,
+                            cluster_identification_value,
+                            "--output",
+                            "json",
                         ]),
-                    ("command", "aws")
+                    ("command", "aws"),
                 ]))
             ]))
         ])
 
-        if self._role_arn is not None:
+        if self._parsed_args.role_arn is not None:
             generated_user["user"]["exec"]["args"].extend([
                 "--role",
-                self._role_arn
+                self._parsed_args.role_arn
             ])
 
         if self._session.profile:

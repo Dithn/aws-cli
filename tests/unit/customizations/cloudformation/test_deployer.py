@@ -249,7 +249,7 @@ class TestDeployer(unittest.TestCase):
         self.deployer.has_stack.return_value = False
 
         self.stub_client.add_client_error(
-                'create_change_set', "Somethign is wrong", "Service is bad")
+                'create_change_set', "Something is wrong", "Service is bad")
         with self.stub_client:
             with self.assertRaises(botocore.exceptions.ClientError):
                 self.deployer.create_changeset(stack_name, template, parameters,
@@ -261,19 +261,36 @@ class TestDeployer(unittest.TestCase):
 
         expected_params = {
             "ChangeSetName": changeset_id,
-            "StackName": stack_name
+            "StackName": stack_name,
+            "DisableRollback": False
         }
 
         self.stub_client.add_response("execute_change_set", {}, expected_params)
         with self.stub_client:
             self.deployer.execute_changeset(changeset_id, stack_name)
 
+    def test_execute_changeset_disable_rollback(self):
+        stack_name = "stack_name"
+        changeset_id = "changeset_id"
+        disable_rollback = True
+
+        expected_params = {
+            "ChangeSetName": changeset_id,
+            "StackName": stack_name,
+            "DisableRollback": disable_rollback
+        }
+
+        self.stub_client.add_response("execute_change_set", {}, expected_params)
+        with self.stub_client:
+            self.deployer.execute_changeset(changeset_id, stack_name,
+                                            disable_rollback)
+
     def test_execute_changeset_exception(self):
         stack_name = "stack_name"
         changeset_id = "changeset_id"
 
         self.stub_client.add_client_error(
-                'execute_change_set', "Somethign is wrong", "Service is bad")
+                'execute_change_set', "Something is wrong", "Service is bad")
         with self.stub_client:
             with self.assertRaises(botocore.exceptions.ClientError):
                 self.deployer.execute_changeset(changeset_id, stack_name)

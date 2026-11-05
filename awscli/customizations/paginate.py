@@ -10,7 +10,7 @@
 # distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
-"""This module has customizations to unify paging paramters.
+"""This module has customizations to unify paging parameters.
 
 For any operation that can be paginated, we will:
 
@@ -24,14 +24,16 @@ For any operation that can be paginated, we will:
 
 """
 import logging
+import sys
 from functools import partial
 
+from awscli.customizations.utils import uni_print
 from botocore import xform_name
 from botocore.exceptions import DataNotFoundError, PaginationError
 from botocore import model
 
 from awscli.arguments import BaseCLIArgument
-
+from awscli.utils import resolve_v2_debug_mode
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +135,9 @@ def unify_paging_params(argument_table, operation_model, event_name,
     _remove_existing_paging_arguments(argument_table, paginator_config)
     parsed_args_event = event_name.replace('building-argument-table.',
                                            'operation-args-parsed.')
+    call_parameters_event = event_name.replace(
+        'building-argument-table', 'calling-command'
+    )
     shadowed_args = {}
     add_paging_argument(argument_table, 'starting-token',
                         PageArgument('starting-token', STARTING_TOKEN_HELP,
@@ -166,6 +171,14 @@ def unify_paging_params(argument_table, operation_model, event_name,
         partial(check_should_enable_pagination,
                 list(_get_all_cli_input_tokens(paginator_config)),
                 shadowed_args, argument_table))
+    session.register(
+        call_parameters_event,
+        partial(
+            check_should_enable_pagination_call_parameters,
+            session,
+            list(_get_all_input_tokens(paginator_config)),
+        ),
+    )
 
 
 def add_paging_argument(argument_table, arg_name, argument, shadowed_args):
@@ -238,6 +251,18 @@ def _get_all_cli_input_tokens(pagination_config):
         yield cli_name
 
 
+# Get all tokens but return them in API namespace rather than CLI namespace
+def _get_all_input_tokens(pagination_config):
+    # Get all input tokens including the limit_key
+    # if it exists.
+    tokens = _get_input_tokens(pagination_config)
+    for token_name in tokens:
+        yield token_name
+    if 'limit_key' in pagination_config:
+        key_name = pagination_config['limit_key']
+        yield key_name
+
+
 def _get_input_tokens(pagination_config):
     tokens = pagination_config['input_token']
     if not isinstance(tokens, list):
@@ -249,6 +274,48 @@ def _get_cli_name(param_objects, token_name):
     for param in param_objects:
         if param.name == token_name:
             return param.cli_name.lstrip('-')
+
+
+def check_should_enable_pagination_call_parameters(
+        session,
+        input_tokens,
+        call_parameters,
+        parsed_args,
+        parsed_globals,
+        **kwargs
+):
+    """
+    Check for pagination args in the actual calling arguments passed to
+    the function.
+
+    If the user is using the --cli-input-json parameter to provide JSON
+    parameters they are all in the API naming space rather than the CLI
+    naming space and would be missed by the processing above. This function
+    gets called on the calling-command event.
+    """
+    if resolve_v2_debug_mode(parsed_globals):
+        cli_input_json_data = session.emit_first_non_none_response(
+            f"get-cli-input-json-data",
+        )
+        if cli_input_json_data is None:
+            cli_input_json_data = {}
+        pagination_params_in_input_tokens = [
+            param for param in cli_input_json_data if param in input_tokens
+        ]
+        if pagination_params_in_input_tokens:
+            uni_print(
+                '\nAWS CLI v2 UPGRADE WARNING: In AWS CLI v2, if you specify '
+                'pagination parameters by using a file with the '
+                '`--cli-input-json` parameter, automatic pagination will be '
+                'turned off. This is different from v1 behavior, where '
+                'pagination parameters specified via the `--cli-input-json` '
+                'parameter are ignored. To retain AWS CLI v1 behavior in '
+                'AWS CLI v2, remove all pagination parameters from the input '
+                'JSON. See https://docs.aws.amazon.com/cli/latest/userguide/'
+                'cliv2-migration-changes.html'
+                '#cliv2-migration-skeleton-paging.\n',
+                out_file=sys.stderr
+            )
 
 
 class PageArgument(BaseCLIArgument):
@@ -265,6 +332,11 @@ class PageArgument(BaseCLIArgument):
         self._documentation = documentation
         self._parse_type = parse_type
         self._required = False
+
+    def _emit_non_positive_max_items_warning(self):
+        uni_print(
+            "warning: Non-positive values for --max-items may result in undefined behavior.\n",
+            sys.stderr)
 
     @property
     def cli_name(self):
@@ -292,6 +364,8 @@ class PageArgument(BaseCLIArgument):
 
     def add_to_params(self, parameters, value):
         if value is not None:
+            if self._serialized_name == 'MaxItems' and int(value) <= 0:
+                self._emit_non_positive_max_items_warning()
             pagination_config = parameters.get('PaginationConfig', {})
             pagination_config[self._serialized_name] = value
             parameters['PaginationConfig'] = pagination_config

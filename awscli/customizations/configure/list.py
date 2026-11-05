@@ -20,15 +20,21 @@ from . import ConfigValue, NOT_SET
 class ConfigureListCommand(BasicCommand):
     NAME = 'list'
     DESCRIPTION = (
-        'List the AWS CLI configuration data.  This command will '
-        'show you the current configuration data.  For each configuration '
-        'item, it will show you the value, where the configuration value '
-        'was retrieved, and the configuration variable name.  For example, '
+        'Lists the profile, access key, secret key, and region configuration '
+        'information used for the specified profile. For each configuration '
+        'item, it shows the value, where the configuration value '
+        'was retrieved, and the configuration variable name.\n'
+        '\n'
+        'For example, '
         'if you provide the AWS region in an environment variable, this '
-        'command will show you the name of the region you\'ve configured, '
-        'it will tell you that this value came from an environment '
-        'variable, and it will tell you the name of the environment '
+        'command shows you the name of the region you\'ve configured, '
+        'that this value came from an environment '
+        'variable, and the name of the environment '
         'variable.\n'
+        '\n'
+        'For temporary credential methods such as roles and IAM Identity '
+        'Center, this command displays the temporarily cached access key and '
+        'secret access key is displayed.\n'
     )
     SYNOPSIS = 'aws configure list [--profile profile-name]'
     EXAMPLES = (
@@ -44,8 +50,10 @@ class ConfigureListCommand(BasicCommand):
         '\n'
     )
 
-    def __init__(self, session, stream=sys.stdout):
+    def __init__(self, session, stream=None):
         super(ConfigureListCommand, self).__init__(session)
+        if stream is None:
+            stream = sys.stdout
         self._stream = stream
 
     def _run_main(self, args, parsed_globals):
@@ -66,6 +74,7 @@ class ConfigureListCommand(BasicCommand):
 
         region = self._lookup_config('region')
         self._display_config_value(region, 'region')
+        return 0
 
     def _display_config_value(self, config_value, config_name):
         self._stream.write('%10s %24s %16s    %s\n' % (

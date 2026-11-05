@@ -14,7 +14,8 @@ import re
 import os
 import random
 import time
-from nose.tools import assert_equal
+
+import pytest
 
 from awscli.testutils import aws
 
@@ -27,8 +28,6 @@ COMMANDS = [
     'autoscaling describe-adjustment-types',
     'cloudformation describe-stacks',
     'cloudformation list-stacks',
-    'cloudsearch describe-domains',
-    'cloudsearch list-domain-names',
     'cloudtrail describe-trails',
     'cloudwatch list-metrics',
     'cognito-identity list-identity-pools --max-results 1',
@@ -46,10 +45,9 @@ COMMANDS = [
     'kinesis list-streams',
     'kms generate-random --number-of-bytes 128',
     'logs describe-log-groups',
-    'opsworks describe-stacks',
     'rds describe-db-instances',
     'redshift describe-clusters',
-    'route53 list-hosted-zones',
+    # 'route53 list-hosted-zones',
     'route53domains list-domains',
     's3api list-buckets',
     's3 ls',
@@ -73,14 +71,13 @@ COMMANDS = [
 # at least one command for each service.
 #
 # This verifies that service errors are properly displayed to the user, as
-# opposed to either silently failing or inproperly handling the error responses
+# opposed to either silently failing or improperly handling the error responses
 # and not displaying something useful.  Each command tries to call an operation
 # with an identifier that does not exist, and part of the identifier is also
 # randomly generated to help ensure that is the case.
 ERROR_COMMANDS = [
     'autoscaling attach-instances --auto-scaling-group-name %s',
     'cloudformation cancel-update-stack --stack-name %s',
-    'cloudsearch describe-suggesters --domain-name %s',
     'cloudtrail get-trail-status --name %s',
     'cognito-identity delete-identity-pool --identity-pool-id %s',
     'datapipeline delete-pipeline --pipeline-id %s',
@@ -93,10 +90,9 @@ ERROR_COMMANDS = [
     'iam delete-user --user-name %s',
     'kinesis delete-stream --stream-name %s',
     'logs delete-log-group --log-group-name %s',
-    'opsworks delete-app --app-id %s',
     'rds delete-db-instance --db-instance-identifier %s',
     'redshift delete-cluster --cluster-identifier %s',
-    'route53 delete-hosted-zone --id %s',
+    # 'route53 delete-hosted-zone --id %s',
     'route53domains get-domain-detail --domain-name %s',
     's3api head-bucket --bucket %s',
     'ses set-identity-dkim-enabled --identity %s --dkim-enabled',
@@ -131,30 +127,32 @@ def _aws(command_string, max_attempts=1, delay=5, target_rc=0):
     return aws(command_string, env_vars=env)
 
 
-def test_can_make_success_request():
-    for cmd in COMMANDS:
-        yield _run_successful_aws_command, cmd
+@pytest.mark.parametrize(
+    "cmd",
+    COMMANDS
+)
+def test_can_make_success_request(cmd):
+    result = _aws(cmd, max_attempts=5, delay=5, target_rc=0)
+    assert result.rc == 0
+    assert result.stderr == ''
 
 
-def _run_successful_aws_command(command_string):
-    result = _aws(command_string, max_attempts=5, delay=5, target_rc=0)
-    assert_equal(result.rc, 0)
-    assert_equal(result.stderr, '')
+ERROR_MESSAGE_RE = re.compile(
+    r'An error occurred \(.+\) when calling the \w+ operation: \w+'
+)
 
 
-def test_display_error_message():
+@pytest.mark.parametrize(
+    "cmd",
+    ERROR_COMMANDS
+)
+def test_display_error_message(cmd):
     identifier = 'foo-awscli-test-%s' % random.randint(1000, 100000)
-    for cmd in ERROR_COMMANDS:
-        yield _run_error_aws_command, cmd % identifier
-
-
-def _run_error_aws_command(command_string):
+    command_string = cmd % identifier
     result = _aws(command_string, target_rc=255)
-    assert_equal(result.rc, 255)
-    error_message = re.compile(
-        'An error occurred \(.+\) when calling the \w+ operation: \w+')
-    match = error_message.search(result.stderr)
-    if match is None:
-        raise AssertionError(
-            'Error message was not displayed for command "%s": %s' % (
-                command_string, result.stderr))
+    assert result.rc == 255
+
+    match = ERROR_MESSAGE_RE.search(result.stderr)
+    assert match is not None, (
+        f'Error message was not displayed for command "{command_string}": {result.stderr}'
+    )

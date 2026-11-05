@@ -32,7 +32,8 @@ from awscli.customizations.eks.kubeconfig import (Kubeconfig,
                                                   KubeconfigInaccessableError)
 from tests.functional.eks.test_util import (describe_cluster_response,
                                             describe_cluster_creating_response,
-                                            get_testdata)
+                                            get_testdata,
+                                            assume_role_response)
 
 def sanitize_output(output):
     """
@@ -58,14 +59,23 @@ class TestUpdateKubeconfig(unittest.TestCase):
         self.create_client_patch = mock.patch(
             'botocore.session.Session.create_client'
         )
-        
+
         self.mock_create_client = self.create_client_patch.start()
         self.session = get_session()
 
         self.client = mock.Mock()
         self.client.describe_cluster.return_value = describe_cluster_response()
         self.mock_create_client.return_value = self.client
-                
+
+        # Set up the sts_client_mock
+        self.sts_client_mock = mock.Mock()
+        self.sts_client_mock.assume_role.return_value = assume_role_response()
+
+        # Ensure the mock_create_client correctly returns the appropriate mock
+        self.mock_create_client.side_effect = lambda service_name, **kwargs: (
+            self.sts_client_mock if service_name == "sts" else self.client
+        )
+        
         self.command = UpdateKubeconfigCommand(self.session)
         self.maxDiff = None
 
@@ -102,7 +112,7 @@ class TestUpdateKubeconfig(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self._temp_directory)
         if files is not None:
             for file in files:
-                shutil.copy2(get_testdata(file), 
+                shutil.copy2(get_testdata(file),
                             self._get_temp_config(file))
         return self._temp_directory
 
@@ -116,7 +126,7 @@ class TestUpdateKubeconfig(unittest.TestCase):
         to put in the environment variable
         :type configs: list
         """
-        return build_environment([self._get_temp_config(config) 
+        return build_environment([self._get_temp_config(config)
                                   for config in configs])
 
     def assert_config_state(self, config_name, correct_output_name):
@@ -125,7 +135,7 @@ class TestUpdateKubeconfig(unittest.TestCase):
         as the testdata named correct_output_name.
         Should be called after initialize_tempfiles.
 
-        :param config_name: The filename (not the path) of the tempfile 
+        :param config_name: The filename (not the path) of the tempfile
         to compare
         :type config_name: str
 
@@ -189,7 +199,7 @@ class TestUpdateKubeconfig(unittest.TestCase):
                    verbose=False):
         """
         Run update-kubeconfig in a temp directory,
-        This directory will have copies of all testdata files whose names 
+        This directory will have copies of all testdata files whose names
         are listed in configs.
         The KUBECONFIG environment variable will be set to contain the configs
         listed in env_variable_configs (regardless of whether they exist).
@@ -384,7 +394,7 @@ class TestUpdateKubeconfig(unittest.TestCase):
         configs = ["valid_old_data"]
         passed = "valid_old_data"
         environment = []
-        
+
         self.assert_cmd(configs, passed, environment)
         self.assert_config_state("valid_old_data", "output_combined")
 
@@ -394,7 +404,7 @@ class TestUpdateKubeconfig(unittest.TestCase):
         environment = ["valid_old_data",
                        "output_combined",
                        "output_single"]
-        
+
         self.assert_cmd(configs, passed, environment)
         self.assert_config_state("valid_old_data", "output_combined")
 
@@ -415,3 +425,66 @@ class TestUpdateKubeconfig(unittest.TestCase):
         self.assert_cmd(configs, passed, environment)
         self.assert_config_state("valid_changed_ordering", "output_combined_changed_ordering")
 
+    def test_update_old_api_version(self):
+        configs = ["valid_old_api_version"]
+        passed = "valid_old_api_version"
+        environment = []
+
+        self.assert_cmd(configs, passed, environment)
+        self.assert_config_state("valid_old_api_version", "valid_old_api_version_updated")
+
+    def test_assume_role(self):
+        """
+        Test that assume_role_arn is handled correctly when provided.
+        """
+        configs = ["valid_existing"]
+        self.initialize_tempfiles(configs)
+
+        # Include the --assume-role-arn argument
+        args = [
+            "--name", "ExampleCluster",
+            "--assume-role-arn", "arn:aws:iam::123456789012:role/test-role"
+        ]
+
+        # Mock environment variables and paths
+        kubeconfig_path = self._get_temp_config("valid_existing")
+        default_path = self._get_temp_config("default_temp")
+
+        with mock.patch.dict(os.environ, {'KUBECONFIG': kubeconfig_path}):
+            with mock.patch("awscli.customizations.eks.update_kubeconfig.DEFAULT_PATH", default_path):
+                self.command(args, None)
+
+        # Verify that assume_role was called with the correct parameters
+        self.sts_client_mock.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::123456789012:role/test-role",
+            RoleSessionName="EKSDescribeClusterSession"
+        )
+
+        # Verify that the EKS client was created with the assumed credentials
+        self.mock_create_client.assert_any_call(
+            "eks",
+            aws_access_key_id="test-access-key",
+            aws_secret_access_key="test-secret-key",
+            aws_session_token="test-session-token"
+        )
+
+        # Verify that the cluster was described
+        self.client.describe_cluster.assert_called_once_with(name="ExampleCluster")
+
+        # Assert the configuration state
+        self.assert_config_state("valid_existing", "output_combined")
+
+    def test_no_assume_role(self):
+        """
+        Test that assume_role_arn is not used when not provided.
+        """
+        configs = ["valid_existing"]
+        passed = "valid_existing"
+        environment = []
+
+        self.client.describe_cluster = mock.Mock(return_value=describe_cluster_response())
+        self.assert_cmd(configs, passed, environment)
+
+        # Verify that assume_role was not called
+        self.mock_create_client.assert_called_once_with("eks")
+        self.client.describe_cluster.assert_called_once_with(name="ExampleCluster")

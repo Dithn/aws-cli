@@ -1,12 +1,12 @@
 **Example 1: To create a MySQL 5.7--compatible DB cluster**
 
-The following ``create-db-cluster`` example create a MySQL 5.7-compatible DB cluster. Replace the sample password ``secret99`` with a secure password. The writer DB instance is the first instance that is created in a DB cluster. When you use the console to create a DB cluster, Amazon RDS automatically creates the writer DB instance for your DB cluster. However, when you use the AWS CLI to create a DB cluster, you must explicitly create the writer DB instance for your DB cluster using the ``create-db-instance`` AWS CLI command. ::
+The following ``create-db-cluster`` example creates a MySQL 5.7-compatible DB cluster using the default engine version. Replace the sample password ``secret99`` with a secure password. When you use the console to create a DB cluster, Amazon RDS automatically creates the writer DB instance for your DB cluster. However, when you use the AWS CLI to create a DB cluster, you must explicitly create the writer DB instance for your DB cluster using the ``create-db-instance`` AWS CLI command. ::
 
     aws rds create-db-cluster \
         --db-cluster-identifier sample-cluster \
         --engine aurora-mysql \
-        --engine-version 5.7.12 \
-        --master-username master \
+        --engine-version 5.7 \
+        --master-username admin \
         --master-user-password secret99 \
         --db-subnet-group-name default \
         --vpc-security-group-ids sg-0b9130572daf3dc16
@@ -25,7 +25,7 @@ Output::
             "AllocatedStorage": 1,
             "AssociatedRoles": [],
             "PreferredBackupWindow": "09:12-09:42",
-            "ClusterCreateTime": "2019-06-07T23:21:33.048Z",
+            "ClusterCreateTime": "2023-02-27T23:21:33.048Z",
             "DeletionProtection": false,
             "IAMDatabaseAuthenticationEnabled": false,
             "ReadReplicaIdentifiers": [],
@@ -44,7 +44,7 @@ Output::
                 "us-east-1e"
             ],
             "MasterUsername": "master",
-            "EngineVersion": "5.7.12",
+            "EngineVersion": "5.7.mysql_aurora.2.11.1",
             "DBClusterArn": "arn:aws:rds:us-east-1:123456789012:cluster:sample-cluster",
             "DBClusterMembers": [],
             "Port": 3306,
@@ -59,7 +59,7 @@ Output::
 
 **Example 2: To create a PostgreSQL--compatible DB cluster**
 
-The following ``create-db-cluster`` example creates a PostgreSQL-compatible DB cluster. Replace the example password ``secret99`` with a secure password. The writer DB instance is the first instance that is created in a DB cluster. When you use the console to create a DB cluster, Amazon RDS automatically creates the writer DB instance for your DB cluster. However, when you use the AWS CLI to create a DB cluster, you must explicitly create the writer DB instance for your DB cluster using the ``create-db-instance`` AWS CLI command. ::
+The following ``create-db-cluster`` example creates a PostgreSQL-compatible DB cluster using the default engine version. Replace the example password ``secret99`` with a secure password. When you use the console to create a DB cluster, Amazon RDS automatically creates the writer DB instance for your DB cluster. However, when you use the AWS CLI to create a DB cluster, you must explicitly create the writer DB instance for your DB cluster using the ``create-db-instance`` AWS CLI command. ::
 
     aws rds create-db-cluster \
         --db-cluster-identifier sample-pg-cluster \
@@ -91,9 +91,9 @@ Output::
             "StorageEncrypted": false,
             "BackupRetentionPeriod": 1,
             "PreferredBackupWindow": "09:56-10:26",
-            "ClusterCreateTime": "2019-06-07T23:26:08.371Z",
-            "DBClusterParameterGroup": "default.aurora-postgresql9.6",
-            "EngineVersion": "9.6.9",
+            "ClusterCreateTime": "2023-02-27T23:26:08.371Z",
+            "DBClusterParameterGroup": "default.aurora-postgresql13",
+            "EngineVersion": "13.7",
             "Engine": "aurora-postgresql",
             "Status": "creating",
             "DBClusterIdentifier": "sample-pg-cluster",
@@ -115,4 +115,71 @@ Output::
         }
     }
 
-For more information, see `Creating an Amazon Aurora DB Cluster <https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.CreateInstance.html>`__ in the *Amazon Aurora Users Guide*.
+**Example 3: To create an Aurora PostgreSQL DB cluster with Express Configuration**
+
+The following ``create-db-cluster`` example creates an Aurora PostgreSQL-compatible DB cluster with Express Configuration enabled. Unlike the standard create cluster, Express Configuration automatically adds a DB instance ``sample-cluster-instance-1`` for your DB cluster, so you don't need to separately call the ``create-db-instance`` AWS CLI command. ::
+
+    aws rds create-db-cluster \
+        --db-cluster-identifier sample-cluster \
+        --engine aurora-postgresql \
+        --with-express-configuration
+
+Output::
+
+    {
+        "DBCluster": {
+            "AllocatedStorage": 1,
+            "AvailabilityZones": [
+                "us-east-1c",
+                "us-east-1a",
+                "us-east-1b"
+            ],
+            "BackupRetentionPeriod": 7,
+            "DBClusterIdentifier": "sample-cluster",
+            "DBClusterParameterGroup": "default.aurora-postgresql17",
+            "Status": "creating",
+            "MultiAZ": false,
+            "Engine": "aurora-postgresql",
+            "EngineVersion": "17.7",
+            "Port": 5432,
+            "MasterUsername": "postgres",
+            "PreferredBackupWindow": "06:15-06:45",
+            "PreferredMaintenanceWindow": "sat:03:44-sat:04:14",
+            "ReadReplicaIdentifiers": [],
+            "DBClusterMembers": [
+                {
+                    "DBInstanceIdentifier": "sample-cluster-instance-1",
+                    "IsClusterWriter": false,
+                    "DBClusterParameterGroupStatus": "in-sync",
+                    "PromotionTier": 1
+                }
+            ],
+            "VpcSecurityGroups": [],
+            "StorageEncrypted": false,
+            "DbClusterResourceId": "cluster-EXAMPLE4RESOURCE",
+            "DBClusterArn": "arn:aws:rds:us-east-1:123456789012:cluster:sample-cluster",
+            "AssociatedRoles": [],
+            "IAMDatabaseAuthenticationEnabled": true,
+            "ClusterCreateTime": "2026-01-10T22:14:02Z",
+            "EngineMode": "provisioned",
+            "AutoMinorVersionUpgrade": true,
+            "DeletionProtection": false,
+            "HttpEndpointEnabled": false,
+            "CopyTagsToSnapshot": false,
+            "CrossAccountClone": false,
+            "DomainMemberships": [],
+            "TagList": [],
+            "ServerlessV2ScalingConfiguration": {
+                "MinCapacity": 0.0,
+                "MaxCapacity": 16.0,
+                "SecondsUntilAutoPause": 300
+            },
+            "ServerlessV2PlatformVersion": "3",
+            "DatabaseInsightsMode": "standard",
+            "PerformanceInsightsEnabled": false,
+            "LocalWriteForwardingStatus": "disabled",
+            "EngineLifecycleSupport": "open-source-rds-extended-support"
+        }
+    }
+
+For more information, see `Creating an Amazon Aurora DB cluster <https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.CreateInstance.html>`__ in the *Amazon Aurora User Guide*.

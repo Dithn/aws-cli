@@ -1,18 +1,34 @@
 import collections
 import copy
 import os
+import sys
+import unittest
+
+# Both nose and py.test will add the first parent directory it
+# encounters that does not have a __init__.py to the sys.path. In
+# our case, this is the root of the repository. This means that Python
+# will import the awscli package from source instead of any installed
+# distribution. This environment variable provides the option to remove the
+# repository root from sys.path to be able to rely on the installed
+# distribution when running the tests.
+if os.environ.get('TESTS_REMOVE_REPO_ROOT_FROM_PATH'):
+    rootdir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    sys.path = [
+        path for path in sys.path
+        if not os.path.isdir(path) or not os.path.samefile(path, rootdir)
+    ]
 
 import awscli
 from awscli.clidriver import create_clidriver
 from awscli.compat import collections_abc
-from awscli.testutils import mock, capture_output
+from awscli.testutils import mock, capture_output, skip_if_windows
 
 import botocore.awsrequest
 import botocore.loaders
 import botocore.model
 import botocore.serialize
 import botocore.validate
-
+from botocore.compat import HAS_CRT
 
 # A shared loader to use for classes in this module. This allows us to
 # load models outside of influence of a session and take advantage of
@@ -308,3 +324,64 @@ class CaseInsensitiveDict(collections_abc.MutableMapping):
 
     def __repr__(self):
         return str(dict(self.items()))
+
+
+def requires_crt(reason=None):
+    if callable(reason):
+        raise TypeError(
+            "Use @requires_crt() with parentheses, not bare @requires_crt"
+        )
+    if reason is None:
+        reason = "Test requires awscrt to be installed"
+
+    def decorator(func):
+        return unittest.skipIf(not HAS_CRT, reason)(func)
+
+    return decorator
+
+# Botocore testing utilities that we want to preserve import statements for
+# in botocore specific tests.
+from tests.utils.botocore import (
+    ALL_SERVICES,
+    BaseClientDriverTest,
+    BaseEnvVar,
+    BaseSessionTest,
+    ClientHTTPStubber,
+    ConsistencyWaiter,
+    ConsistencyWaiterException,
+    FreezeTime,
+    IntegerRefresher,
+    RawResponse,
+    SessionHTTPStubber,
+    StubbedSession,
+    assert_url_equal,
+    create_session,
+    get_botocore_default_config_mapping,
+    get_checksum_cls,
+    patch_load_service_model,
+    random_chars,
+    skip_if_crt,
+    skip_if_windows,
+    temporary_file,
+)
+
+# s3transfer testing utilities
+from tests.utils.s3transfer import (
+    BaseGeneralInterfaceTest,
+    BaseSubmissionTaskTest,
+    BaseTaskTest,
+    ETagProvider,
+    FileCreator,
+    FileSizeProvider,
+    NonSeekableReader,
+    NonSeekableWriter,
+    RecordingExecutor,
+    RecordingOSUtils,
+    RecordingSubscriber,
+    StreamWithError,
+    StubbedClientTest,
+    TransferCoordinatorWithInterrupt,
+    assert_files_equal,
+    random_bucket_name,
+    skip_if_using_serial_implementation,
+)

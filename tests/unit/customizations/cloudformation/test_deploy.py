@@ -11,7 +11,6 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 import tempfile
-import six
 import collections
 
 from awscli.testutils import mock, unittest
@@ -52,6 +51,7 @@ class TestDeployCommand(unittest.TestCase):
                                                          "Key2=Value2"],
                                     no_execute_changeset=False,
                                     execute_changeset=True,
+                                    disable_rollback=True,
                                     capabilities=None,
                                     role_arn=None,
                                     notification_arns=[],
@@ -119,7 +119,9 @@ class TestDeployCommand(unittest.TestCase):
                     [],
                     None,
                     fake_tags,
-                    True
+                    True,
+                    True,
+                    False
                 )
 
                 self.deploy_command.parse_key_value_arg.assert_has_calls([
@@ -205,7 +207,9 @@ class TestDeployCommand(unittest.TestCase):
                 [],
                 s3UploaderObject,
                 [{"Key": "tagkey1", "Value": "tagvalue1"}],
-                True
+                True,
+                True,
+                False
             )
 
             s3UploaderMock.assert_called_once_with(mock.ANY,
@@ -257,7 +261,7 @@ class TestDeployCommand(unittest.TestCase):
                                                      tags=tags)
 
         # since execute_changeset is set to True, deploy() will execute changeset
-        self.deployer.execute_changeset.assert_called_once_with(changeset_id, stack_name)
+        self.deployer.execute_changeset.assert_called_once_with(changeset_id, stack_name, False)
         self.deployer.wait_for_execute.assert_called_once_with(stack_name, changeset_type)
 
 
@@ -412,14 +416,14 @@ class TestDeployCommand(unittest.TestCase):
         }
 
         expected_result = [
-            # Overriden values
+            # Overridden values
             {"ParameterKey": "Key1", "ParameterValue": "Value1"},
             {"ParameterKey": "Key3", "ParameterValue": "Value3"},
 
             # Parameter contains default value, but overridden with new value
             {"ParameterKey": "KeyWithDefaultValueButOverridden", "ParameterValue": "Value4"},
 
-            # non-overriden values
+            # non-overridden values
             {"ParameterKey": "Key2", "UsePreviousValue": True},
             {"ParameterKey": "Key4", "UsePreviousValue": True},
 

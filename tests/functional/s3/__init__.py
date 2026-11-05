@@ -11,7 +11,7 @@
 # ANY KIND, either express or implied. See the License for the specific
 # language governing permissions and limitations under the License.
 from awscli.testutils import mock, BaseAWSCommandParamsTest, FileCreator
-from awscli.compat import six
+from awscli.compat import BytesIO
 
 class BaseS3TransferCommandTest(BaseAWSCommandParamsTest):
     def setUp(self):
@@ -33,31 +33,30 @@ class BaseS3TransferCommandTest(BaseAWSCommandParamsTest):
     def head_object_response(self, **override_kwargs):
         response = {
             'ContentLength': 100,
-            'LastModified': '00:00:00Z'
+            'LastModified': '00:00:00Z',
+            'ETag': '"foo-1"'
         }
         response.update(override_kwargs)
         return response
 
-    def list_objects_response(self, keys):
+    def list_objects_response(self, keys, **override_kwargs):
         contents = []
         for key in keys:
-            contents.append(
-                {
-                    'Key': key,
-                    'LastModified': '00:00:00Z',
-                    'Size': 100
-                }
-            )
-
-        return {
-            'Contents': contents,
-            'CommonPrefixes': []
-        }
+            content = {
+                'Key': key,
+                'LastModified': '00:00:00Z',
+                'Size': 100,
+                'ETag': '"foo-1"',
+            }
+            if override_kwargs:
+                content.update(override_kwargs)
+            contents.append(content)
+        return {'Contents': contents, 'CommonPrefixes': []}
 
     def get_object_response(self):
         return {
             'ETag': '"foo-1"',
-            'Body': six.BytesIO(b'foo')
+            'Body': BytesIO(b'foo')
         }
 
     def copy_object_response(self):
@@ -105,6 +104,7 @@ class BaseS3TransferCommandTest(BaseAWSCommandParamsTest):
         params = {
             'Bucket': bucket,
             'Key': key,
+            'ChecksumAlgorithm': 'CRC32',
             'Body': mock.ANY,
         }
         params.update(override_kwargs)
@@ -179,3 +179,10 @@ class BaseS3TransferCommandTest(BaseAWSCommandParamsTest):
         }
         params.update(override_kwargs)
         return 'CompleteMultipartUpload', params
+
+    def mp_copy_responses(self):
+        return [
+            self.create_mpu_response('upload_id'),
+            self.upload_part_copy_response(),
+            self.complete_mpu_response(),
+        ]

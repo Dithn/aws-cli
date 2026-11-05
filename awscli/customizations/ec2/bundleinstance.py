@@ -17,9 +17,8 @@ import hmac
 import base64
 import datetime
 
-from awscli.compat import six
-
 from awscli.arguments import CustomArgument
+from awscli.compat import get_current_datetime
 
 logger = logging.getLogger('ec2bundleinstance')
 
@@ -119,7 +118,7 @@ def _generate_policy(params):
     # Called if there is no policy supplied by the user.
     # Creates a policy that provides access for 24 hours.
     delta = datetime.timedelta(hours=24)
-    expires = datetime.datetime.utcnow() + delta
+    expires = get_current_datetime() + delta
     expires_iso = expires.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     policy = POLICY.format(expires=expires_iso,
                            bucket=params['Bucket'],
@@ -132,10 +131,10 @@ def _generate_signature(params):
     policy = params.get('UploadPolicy')
     sak = params.get('_SAK')
     if policy and sak:
-        policy = base64.b64encode(six.b(policy)).decode('utf-8')
+        policy = base64.b64encode(policy.encode('latin-1')).decode('utf-8')
         new_hmac = hmac.new(sak.encode('utf-8'), digestmod=sha1)
-        new_hmac.update(six.b(policy))
-        ps = base64.encodestring(new_hmac.digest()).strip().decode('utf-8')
+        new_hmac.update(policy.encode('latin-1'))
+        ps = base64.encodebytes(new_hmac.digest()).strip().decode('utf-8')
         params['UploadPolicySignature'] = ps
         del params['_SAK']
 

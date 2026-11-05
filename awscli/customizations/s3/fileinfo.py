@@ -22,7 +22,7 @@ class FileInfo(object):
     :param dest: the destination path
     :type dest: string
     :param compare_key: the name of the file relative to the specified
-        directory/prefix.  This variable is used when performing synching
+        directory/prefix.  This variable is used when performing syncing
         or if the destination file is adopting the source file's name.
     :type compare_key: string
     :param size: The size of the file in bytes.
@@ -42,7 +42,8 @@ class FileInfo(object):
                  last_update=None, src_type=None, dest_type=None,
                  operation_name=None, client=None, parameters=None,
                  source_client=None, is_stream=False,
-                 associated_response_data=None):
+                 associated_response_data=None, etag=None,
+                 case_conflict_submitted=None, case_conflict_key=None,):
         self.src = src
         self.src_type = src_type
         self.operation_name = operation_name
@@ -59,6 +60,9 @@ class FileInfo(object):
         self.source_client = source_client
         self.is_stream = is_stream
         self.associated_response_data = associated_response_data
+        self.etag = etag
+        self.case_conflict_submitted = case_conflict_submitted
+        self.case_conflict_key = case_conflict_key
 
     def is_glacier_compatible(self):
         """Determines if a file info object is glacier compatible

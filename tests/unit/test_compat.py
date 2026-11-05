@@ -12,40 +12,44 @@
 # language governing permissions and limitations under the License.
 import os
 import signal
+import subprocess
+import sys
 
-from nose.tools import assert_equal
-from botocore.compat import six
+import pytest
 
 from awscli.compat import ensure_text_type
 from awscli.compat import compat_shell_quote
+from awscli.compat import compat_open
 from awscli.compat import get_popen_kwargs_for_pager_cmd
 from awscli.compat import ignore_user_entered_signals
-from awscli.testutils import mock, unittest, skip_if_windows
+from awscli.testutils import (
+    mock, unittest, skip_if_windows, if_windows, FileCreator
+)
 
 
 class TestEnsureText(unittest.TestCase):
     def test_string(self):
         value = 'foo'
         response = ensure_text_type(value)
-        self.assertIsInstance(response, six.text_type)
+        self.assertIsInstance(response, str)
         self.assertEqual(response, 'foo')
 
     def test_binary(self):
         value = b'bar'
         response = ensure_text_type(value)
-        self.assertIsInstance(response, six.text_type)
+        self.assertIsInstance(response, str)
         self.assertEqual(response, 'bar')
 
     def test_unicode(self):
         value = u'baz'
         response = ensure_text_type(value)
-        self.assertIsInstance(response, six.text_type)
+        self.assertIsInstance(response, str)
         self.assertEqual(response, 'baz')
 
     def test_non_ascii(self):
         value = b'\xe2\x9c\x93'
         response = ensure_text_type(value)
-        self.assertIsInstance(response, six.text_type)
+        self.assertIsInstance(response, str)
         self.assertEqual(response, u'\u2713')
 
     def test_non_string_or_bytes_raises_error(self):
@@ -54,40 +58,140 @@ class TestEnsureText(unittest.TestCase):
             ensure_text_type(value)
 
 
-def test_compat_shell_quote_windows():
-    windows_cases = {
-        '': '""',
-        '"': '\\"',
-        '\\': '\\',
-        '\\a': '\\a',
-        '\\\\': '\\\\',
-        '\\"': '\\\\\\"',
-        '\\\\"': '\\\\\\\\\\"',
-        'foo bar': '"foo bar"',
-        'foo\tbar': '"foo\tbar"',
-    }
-    for input_string, expected_output in windows_cases.items():
-        yield ShellQuoteTestCase().run, input_string, expected_output, "win32"
+@pytest.mark.parametrize(
+    "input_string, expected_output",
+    (
+        ('', '""'),
+        ('"', '\\"'),
+        ('\\', '\\'),
+        ('\\a', '\\a'),
+        ('\\\\', '\\\\'),
+        ('\\"', '\\\\\\"'),
+        ('\\\\"', '\\\\\\\\\\"'),
+        ('foo bar', '"foo bar"'),
+        ('foo\tbar', '"foo\tbar"'),
+    )
+)
+def test_compat_shell_quote_windows(input_string, expected_output):
+    assert compat_shell_quote(input_string, "win32") == expected_output
 
 
-def test_comat_shell_quote_unix():
-    unix_cases = {
-        "": "''",
-        "*": "'*'",
-        "foo": "foo",
-        "foo bar": "'foo bar'",
-        "foo\tbar": "'foo\tbar'",
-        "foo\nbar": "'foo\nbar'",
-        "foo'bar": "'foo'\"'\"'bar'",
-    }
-    for input_string, expected_output in unix_cases.items():
-        yield ShellQuoteTestCase().run, input_string, expected_output, "linux2"
-        yield ShellQuoteTestCase().run, input_string, expected_output, "darwin"
+@pytest.mark.parametrize(
+    "input_string, expected_output",
+    (
+        ('', '^"^"'),
+        ('foo', 'foo'),
+        ('foo bar', '^"foo bar^"'),
+        ('foo\tbar', '^"foo\tbar^"'),
+        ('"', '^"\\^"^"'),
+        ('\\', '\\'),
+        ('\\a', '\\a'),
+        ('\\\\', '\\\\'),
+        ('\\"', '^"\\\\\\^"^"'),
+        ('foo&bar', '^"foo^&bar^"'),
+        ('foo|bar', '^"foo^|bar^"'),
+        ('foo>bar', '^"foo^>bar^"'),
+        ('foo<bar', '^"foo^<bar^"'),
+        ('foo^bar', '^"foo^^bar^"'),
+        ('foo(bar)', '^"foo^(bar^)^"'),
+        ('foo,bar', '^"foo,bar^"'),
+        ('foo;bar', '^"foo;bar^"'),
+        ('foo=bar', '^"foo=bar^"'),
+        ('foo!bar', '^"foo^!bar^"'),
+        ('foo%PATH%bar', 'foo^%PATH^%bar'),
+        ('%PATH:a=b%', '^"^%PATH^:a=b^%^"'),
+        ('arn:aws:s3:::bucket', 'arn^:aws^:s3^:^:^:bucket'),
+        ('foo\\', 'foo\\'),
+        ('foo bar\\', '^"foo bar\\\\^"'),
+        (
+            'foo" & echo pwned & echo "bar',
+            '^"foo\\^" ^& echo pwned ^& echo \\^"bar^"',
+        ),
+        ('"&echo pwned&"', '^"\\^"^&echo pwned^&\\^"^"'),
+    ),
+)
+def test_compat_shell_quote_windows_for_cmd_exe(input_string, expected_output):
+    assert (
+        compat_shell_quote(input_string, "win32", shell=True)
+        == expected_output
+    )
 
 
-class ShellQuoteTestCase(object):
-    def run(self, s, expected, platform=None):
-        assert_equal(compat_shell_quote(s, platform), expected)
+@if_windows("Requires cmd.exe")
+@pytest.mark.parametrize(
+    "input_args",
+    (
+        [''],
+        ['foo bar'],
+        ['foo bar\\'],
+        ['{"a": "b c"}'],
+        ['arn:aws:s3:::bucket/key'],
+        ['foo&bar'],
+        ['foo|bar'],
+        ['foo>bar'],
+        ['foo<bar'],
+        ['(foo)'],
+        ['%PATH%'],
+        ['%PATH:a=b%'],
+        ['%PATH:~0,1%'],
+        ['%PATH:a=', 'b%'],
+        ['foo" & echo pwned & echo "bar'],
+        ['"&echo pwned&"'],
+        ['"|echo pwned|"'],
+        ['"^&echo pwned^&"'],
+        ['">pwned.txt"'],
+    ),
+)
+def test_compat_shell_quote_windows_round_trips_through_cmd_exe(
+    input_args, tmp_path
+):
+    print_argv = 'import sys; print(repr(sys.argv[1:]))'
+    command = ' '.join(
+        [
+            compat_shell_quote(sys.executable, "win32", shell=True),
+            '-c',
+            compat_shell_quote(print_argv, "win32", shell=True),
+        ]
+        + [compat_shell_quote(a, "win32", shell=True) for a in input_args]
+    )
+    result = subprocess.run(
+        command, shell=True, capture_output=True, text=True, cwd=tmp_path
+    )
+    assert result.stdout.splitlines() == [repr(input_args)]
+    assert result.stderr == ''
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "input_string, expected_output",
+    (
+        ('', "''"),
+        ('*', "'*'"),
+        ('foo', 'foo'),
+        ('foo bar', "'foo bar'"),
+        ('foo\tbar', "'foo\tbar'"),
+        ('foo\nbar', "'foo\nbar'"),
+        ("foo'bar", '\'foo\'"\'"\'bar\'')
+    )
+)
+def test_comat_shell_quote_linux(input_string, expected_output):
+    assert compat_shell_quote(input_string, "linux2") == expected_output
+
+
+@pytest.mark.parametrize(
+    "input_string, expected_output",
+    (
+        ('', "''"),
+        ('*', "'*'"),
+        ('foo', 'foo'),
+        ('foo bar', "'foo bar'"),
+        ('foo\tbar', "'foo\tbar'"),
+        ('foo\nbar', "'foo\nbar'"),
+        ("foo'bar", '\'foo\'"\'"\'bar\'')
+    )
+)
+def test_comat_shell_quote_darwin(input_string, expected_output):
+    assert compat_shell_quote(input_string, "darwin") == expected_output
 
 
 class TestGetPopenPagerCmd(unittest.TestCase):
@@ -137,3 +241,28 @@ class TestIgnoreUserSignals(unittest.TestCase):
         with ignore_user_entered_signals():
             self.assertEqual(signal.getsignal(signal.SIGTSTP), signal.SIG_IGN)
             os.kill(os.getpid(), signal.SIGTSTP)
+
+
+class TestCompatOpenWithAccessPermissions(unittest.TestCase):
+    def setUp(self):
+        self.files = FileCreator()
+
+    def tearDown(self):
+        self.files.remove_all()
+
+    @skip_if_windows('Permissions tests only supported on mac/linux')
+    def test_can_create_file_with_acess_permissions(self):
+        file_path = os.path.join(self.files.rootdir, "foo_600.txt")
+        with compat_open(file_path, access_permissions=0o600, mode='w') as f:
+            f.write('bar')
+        self.assertEqual(os.stat(file_path).st_mode & 0o777, 0o600)
+
+    def test_not_override_existing_file_access_permissions(self):
+        file_path = os.path.join(self.files.rootdir, "foo.txt")
+        with open(file_path, mode='w') as f:
+            f.write('bar')
+        expected_st_mode = os.stat(file_path).st_mode
+
+        with compat_open(file_path, access_permissions=0o600, mode='w') as f:
+            f.write('bar')
+        self.assertEqual(os.stat(file_path).st_mode, expected_st_mode)

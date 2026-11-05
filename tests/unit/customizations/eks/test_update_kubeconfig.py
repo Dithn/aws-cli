@@ -13,26 +13,32 @@
 
 import glob
 import os
-import tempfile
 import shutil
 import sys
+import tempfile
+from argparse import Namespace
+
 import botocore
 from botocore.compat import OrderedDict
 
-from awscli.testutils import mock, unittest
-from awscli.customizations.utils import uni_print
 import awscli.customizations.eks.kubeconfig as kubeconfig
-from awscli.customizations.eks.update_kubeconfig import (KubeconfigSelector,
-                                                         EKSClient,
-                                                         API_VERSION)
-from awscli.customizations.eks.exceptions import (EKSError,
-                                                  EKSClusterError)
+from awscli.customizations.eks.exceptions import EKSClusterError, EKSError
 from awscli.customizations.eks.ordered_yaml import ordered_yaml_load
-from tests.functional.eks.test_util import get_testdata
-from tests.functional.eks.test_util import (describe_cluster_response,
-                                            describe_cluster_no_status_response,
-                                            describe_cluster_creating_response,
-                                            describe_cluster_deleting_response)
+from awscli.customizations.eks.update_kubeconfig import (API_VERSION,
+                                                         EKSClient,
+                                                         KubeconfigSelector)
+from awscli.customizations.utils import uni_print
+from awscli.testutils import mock, unittest
+from tests.functional.eks.test_util import (
+    describe_cluster_creating_response,
+    describe_cluster_deleting_response,
+    describe_cluster_no_status_response,
+    describe_cluster_response,
+    describe_cluster_response_outpost_cluster,
+    describe_cluster_response_outpost_cluster_with_etcd,
+    get_testdata,
+)
+
 
 def generate_env_variable(files):
     """
@@ -166,6 +172,7 @@ class TestEKSClient(unittest.TestCase):
             ])),
             ("name", describe_cluster_response()["cluster"]["arn"])
         ])
+
         self._correct_user_entry = OrderedDict([
             ("name", describe_cluster_response()["cluster"]["arn"]),
             ("user", OrderedDict([
@@ -178,7 +185,30 @@ class TestEKSClient(unittest.TestCase):
                             "eks",
                             "get-token",
                             "--cluster-name",
-                            "ExampleCluster"
+                            "ExampleCluster",
+                            "--output",
+                            "json",
+                        ]),
+                    ("command", "aws")
+                ]))
+            ]))
+        ])
+
+        self._correct_user_entry_outpost_cluster = OrderedDict([
+            ("name", describe_cluster_response()["cluster"]["arn"]),
+            ("user", OrderedDict([
+                ("exec", OrderedDict([
+                    ("apiVersion", API_VERSION),
+                    ("args",
+                        [
+                            "--region",
+                            "region",
+                            "eks",
+                            "get-token",
+                            "--cluster-id",
+                            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+                            "--output",
+                            "json",
                         ]),
                     ("command", "aws")
                 ]))
@@ -193,10 +223,10 @@ class TestEKSClient(unittest.TestCase):
         self._session.create_client.return_value = self._mock_client
         self._session.profile = None
 
-        self._client = EKSClient(self._session, "ExampleCluster", None)
+        self._client = EKSClient(self._session, parsed_args=Namespace(cluster_name="ExampleCluster", role_arn=None, proxy_url=None))
 
     def test_get_cluster_description(self):
-        self.assertEqual(self._client._get_cluster_description(),
+        self.assertEqual(self._client.cluster_description,
                          describe_cluster_response()["cluster"])
         self._mock_client.describe_cluster.assert_called_once_with(
             name="ExampleCluster"
@@ -206,8 +236,8 @@ class TestEKSClient(unittest.TestCase):
     def test_get_cluster_description_no_status(self):
         self._mock_client.describe_cluster.return_value = \
             describe_cluster_no_status_response()
-        self.assertRaises(EKSClusterError,
-                          self._client._get_cluster_description)
+        with self.assertRaises(EKSClusterError):
+            self._client.cluster_description
         self._mock_client.describe_cluster.assert_called_once_with(
             name="ExampleCluster"
         )
@@ -221,9 +251,53 @@ class TestEKSClient(unittest.TestCase):
         )
         self._session.create_client.assert_called_once_with("eks")
 
+    def test_get_cluster_entry_with_proxy_url_passed(self):
+        proxy_url = "https://myproxy.com"
+        correct_cluster_entry_with_proxy_url = OrderedDict([
+            ("cluster", OrderedDict([
+                ("certificate-authority-data", describe_cluster_response()\
+                    ["cluster"]["certificateAuthority"]["data"]),
+                ("server", describe_cluster_response()["cluster"]["endpoint"]),
+                ("proxy-url", proxy_url)
+            ])),
+            ("name", describe_cluster_response()["cluster"]["arn"])
+        ])
+        client = EKSClient(self._session, parsed_args=Namespace(cluster_name="ProxiedCluster", 
+                                                                role_arn=None, 
+                                                                proxy_url=proxy_url))        
+        self.assertEqual(client.get_cluster_entry(), 
+                         correct_cluster_entry_with_proxy_url)
+        self._mock_client.describe_cluster.assert_called_once_with(
+            name="ProxiedCluster"
+        )
+        self._session.create_client.assert_called_once_with("eks")
+
     def test_get_user_entry(self):
         self.assertEqual(self._client.get_user_entry(),
                          self._correct_user_entry)
+        self._mock_client.describe_cluster.assert_called_once_with(
+            name="ExampleCluster"
+        )
+        self._session.create_client.assert_called_once_with("eks")
+
+    def test_get_user_entry_outpost_cluster(self):
+        self._mock_client.describe_cluster.return_value =\
+                                                    describe_cluster_response_outpost_cluster()
+        self.assertEqual(self._client.get_user_entry(),
+                         self._correct_user_entry_outpost_cluster)
+        self._mock_client.describe_cluster.assert_called_once_with(
+            name="ExampleCluster"
+        )
+        self._session.create_client.assert_called_once_with("eks") 
+
+    def test_get_user_entry_outpost_cluster_with_etcd(self):
+        self._mock_client.describe_cluster.return_value = (
+            describe_cluster_response_outpost_cluster_with_etcd()
+        )
+        self.assertEqual(
+            self._client.get_user_entry(),
+            self._correct_user_entry,
+        )
         self._mock_client.describe_cluster.assert_called_once_with(
             name="ExampleCluster"
         )
@@ -242,8 +316,8 @@ class TestEKSClient(unittest.TestCase):
     def test_cluster_creating(self):
         self._mock_client.describe_cluster.return_value =\
                                            describe_cluster_creating_response()
-        self.assertRaises(EKSClusterError,
-                          self._client._get_cluster_description)
+        with self.assertRaises(EKSClusterError):
+            self._client.cluster_description
         self._mock_client.describe_cluster.assert_called_once_with(
             name="ExampleCluster"
         )
@@ -252,8 +326,8 @@ class TestEKSClient(unittest.TestCase):
     def test_cluster_deleting(self):
         self._mock_client.describe_cluster.return_value =\
                                            describe_cluster_deleting_response()
-        self.assertRaises(EKSClusterError,
-                          self._client._get_cluster_description)
+        with self.assertRaises(EKSClusterError):
+            self._client.cluster_description
         self._mock_client.describe_cluster.assert_called_once_with(
             name="ExampleCluster"
         )
@@ -267,6 +341,23 @@ class TestEKSClient(unittest.TestCase):
                 ("value", "profile")
             ])
         ]
+        self.assertEqual(self._client.get_user_entry(),
+                         self._correct_user_entry)
+        self._mock_client.describe_cluster.assert_called_once_with(
+            name="ExampleCluster"
+        )
+        self._session.create_client.assert_called_once_with("eks")
+
+    def test_create_user_with_alias(self):
+        self._correct_user_entry["name"] = "alias"
+        self.assertEqual(self._client.get_user_entry(user_alias="alias"),
+                         self._correct_user_entry)
+        self._mock_client.describe_cluster.assert_called_once_with(
+            name="ExampleCluster"
+        )
+        self._session.create_client.assert_called_once_with("eks")
+
+    def test_create_user_without_alias(self):
         self.assertEqual(self._client.get_user_entry(),
                          self._correct_user_entry)
         self._mock_client.describe_cluster.assert_called_once_with(

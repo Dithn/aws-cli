@@ -14,6 +14,7 @@
 # Class to create default roles for datapipeline
 
 import logging
+import warnings
 from awscli.customizations.datapipeline.constants \
     import DATAPIPELINE_DEFAULT_SERVICE_ROLE_NAME, \
     DATAPIPELINE_DEFAULT_RESOURCE_ROLE_NAME, \
@@ -24,24 +25,44 @@ from awscli.customizations.datapipeline.constants \
 from awscli.customizations.commands import BasicCommand
 from awscli.customizations.datapipeline.translator \
     import display_response, dict_to_string, get_region
+from awscli.utils import create_nested_client
+
 from botocore.exceptions import ClientError
 
 LOG = logging.getLogger(__name__)
 
 
+_DEPRECATION_NOTICE = """
+Support for this command has been deprecated and may fail to create these roles
+if they do not already exist. For more information on managing these policies
+manually see the following documentation:
+
+https://docs.aws.amazon.com/datapipeline/latest/DeveloperGuide/dp-iam-roles.html
+"""
+
+_DESCRIPTION = """
+NOTE: {}
+
+Creates the default IAM role "{}" and "{}" which are used while creating an EMR
+cluster.
+
+If these roles do not exist, create-default-roles will automatically create
+them and set their policies.
+
+If these roles have already been created create-default-roles will not update
+their policies.
+"""
+
+
 class CreateDefaultRoles(BasicCommand):
 
     NAME = "create-default-roles"
-    DESCRIPTION = ('Creates the default IAM role ' +
-                   DATAPIPELINE_DEFAULT_SERVICE_ROLE_NAME + ' and ' +
-                   DATAPIPELINE_DEFAULT_RESOURCE_ROLE_NAME +
-                   ' which are used while creating an EMR cluster.\n'
-                   'If the roles do not exist, create-default-roles '
-                   'will automatically create them and set their policies.'
-                   ' If these roles are already '
-                   'created create-default-roles'
-                   ' will not update their policies.'
-                   '\n')
+    _UNDOCUMENTED = True
+    DESCRIPTION = _DESCRIPTION.format(
+        _DEPRECATION_NOTICE,
+        DATAPIPELINE_DEFAULT_SERVICE_ROLE_NAME,
+        DATAPIPELINE_DEFAULT_RESOURCE_ROLE_NAME,
+    )
 
     def __init__(self, session, formatter=None):
         super(CreateDefaultRoles, self).__init__(session)
@@ -50,12 +71,13 @@ class CreateDefaultRoles(BasicCommand):
         """Call to run the commands"""
         self._region = get_region(self._session, parsed_globals)
         self._endpoint_url = parsed_globals.endpoint_url
-        self._iam_client = self._session.create_client(
-            'iam', 
+        self._iam_client = create_nested_client(
+            self._session, 'iam', 
             region_name=self._region, 
             endpoint_url=self._endpoint_url,
             verify=parsed_globals.verify_ssl
         )
+        warnings.warn(_DEPRECATION_NOTICE)
         return self._create_default_roles(parsed_args, parsed_globals)
 
     def _create_role(self, role_name, role_arn, role_policy):

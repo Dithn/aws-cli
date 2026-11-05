@@ -26,8 +26,6 @@ ARGUMENT_RENAMES = {
     'ec2.create-image.no-no-reboot': 'reboot',
     'ec2.*.no-egress': 'ingress',
     'ec2.*.no-disable-api-termination': 'enable-api-termination',
-    'opsworks.*.region': 'stack-region',
-    'elastictranscoder.*.output': 'job-output',
     'swf.register-activity-type.version': 'activity-version',
     'swf.register-workflow-type.version': 'workflow-version',
     'datapipeline.*.query': 'objects-query',
@@ -91,23 +89,30 @@ ARGUMENT_RENAMES = {
     'license-manager.get-grant.version': 'grant-version',
     'license-manager.delete-grant.version': 'grant-version',
     'license-manager.get-license.version': 'license-version',
-    'mobile.create-project.region': 'project-region',
     'rekognition.create-stream-processor.output': 'stream-processor-output',
     'eks.create-cluster.version': 'kubernetes-version',
     'eks.update-cluster-version.version': 'kubernetes-version',
     'eks.create-nodegroup.version': 'kubernetes-version',
     'eks.update-nodegroup-version.version': 'kubernetes-version',
+    'eks.update-cluster-components-version.version': 'kubernetes-version',
     'schemas.*.version': 'schema-version',
     'sagemaker.delete-image-version.version': 'version-number',
     'sagemaker.describe-image-version.version': 'version-number',
+    'sagemaker.list-aliases.version': 'version-number',
+    'sagemaker.update-image-version.version': 'version-number',
     'iotwireless.*.lo-ra-wan': 'lorawan',
     'codepipeline.get-action-type.version': 'action-version',
     'ecs.*.no-enable-execute-command': 'disable-execute-command',
     'ecs.execute-command.no-interactive': 'non-interactive',
+    'controltower.create-landing-zone.version': 'landing-zone-version',
+    'controltower.update-landing-zone.version': 'landing-zone-version',
+    'glue.get-unfiltered-partition-metadata.region': 'resource-region',
+    'glue.get-unfiltered-partitions-metadata.region': 'resource-region',
+    'glue.get-unfiltered-table-metadata.region': 'resource-region',
 }
 
 # Same format as ARGUMENT_RENAMES, but instead of renaming the arguments,
-# an alias is created to the original arugment and marked as undocumented.
+# an alias is created to the original argument and marked as undocumented.
 # This is useful when you need to change the name of an argument but you
 # still need to support the old argument.
 HIDDEN_ALIASES = {
@@ -134,7 +139,6 @@ HIDDEN_ALIASES = {
     'importexport.get-shipping-label.street3': 'street-3',
     'lambda.publish-version.code-sha256': 'code-sha-256',
     'lightsail.import-key-pair.public-key-base64': 'public-key-base-64',
-    'opsworks.register-volume.ec2-volume-id': 'ec-2-volume-id',
     'mgn.*.replication-servers-security-groups-ids':
         'replication-servers-security-groups-i-ds',
     'mgn.*.source-server-ids': 'source-server-i-ds',

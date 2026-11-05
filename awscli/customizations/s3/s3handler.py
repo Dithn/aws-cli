@@ -39,13 +39,14 @@ from awscli.customizations.s3.results import CommandResultRecorder
 from awscli.customizations.s3.utils import RequestParamsMapper
 from awscli.customizations.s3.utils import StdoutBytesWriter
 from awscli.customizations.s3.utils import ProvideSizeSubscriber
+from awscli.customizations.s3.utils import ProvideETagSubscriber
 from awscli.customizations.s3.utils import ProvideUploadContentTypeSubscriber
-from awscli.customizations.s3.utils import ProvideCopyContentTypeSubscriber
 from awscli.customizations.s3.utils import ProvideLastModifiedTimeSubscriber
 from awscli.customizations.s3.utils import DirectoryCreatorSubscriber
 from awscli.customizations.s3.utils import DeleteSourceFileSubscriber
 from awscli.customizations.s3.utils import DeleteSourceObjectSubscriber
 from awscli.customizations.s3.utils import DeleteCopySourceObjectSubscriber
+from awscli.customizations.s3.utils import CaseConflictCleanupSubscriber
 from awscli.compat import get_binary_stdin
 
 
@@ -277,7 +278,7 @@ class BaseTransferRequestSubmitter(object):
         for warning_handler in self._get_warning_handlers():
             if warning_handler(fileinfo):
                 # On the first warning handler that returns a signal to skip
-                # immediately propogate this signal and no longer check
+                # immediately propagate this signal and no longer check
                 # the other warning handlers as no matter what the file will
                 # be skipped.
                 return True
@@ -320,8 +321,10 @@ class BaseTransferRequestSubmitter(object):
         # normpath() will use the OS path separator so we
         # need to take that into account when checking for a parent prefix.
         parent_prefix = '..' + os.path.sep
-        escapes_cwd = os.path.normpath(fileinfo.compare_key).startswith(
-            parent_prefix)
+        # Anchor compare_key against '.' (the destination directory root)
+        # to avoid false negatives on paths like '/../foo'
+        normalized = os.path.normpath('.' + os.path.sep + fileinfo.compare_key)
+        escapes_cwd = normalized.startswith(parent_prefix)
         if escapes_cwd:
             warning = create_warning(
                 fileinfo.compare_key, "File references a parent directory.")
@@ -395,12 +398,20 @@ class DownloadRequestSubmitter(BaseTransferRequestSubmitter):
 
     def _add_additional_subscribers(self, subscribers, fileinfo):
         subscribers.append(ProvideSizeSubscriber(fileinfo.size))
+        subscribers.append(ProvideETagSubscriber(fileinfo.etag))
         subscribers.append(DirectoryCreatorSubscriber())
         subscribers.append(ProvideLastModifiedTimeSubscriber(
             fileinfo.last_update, self._result_queue))
         if self._cli_params.get('is_move', False):
             subscribers.append(DeleteSourceObjectSubscriber(
                 fileinfo.source_client))
+        if fileinfo.case_conflict_submitted is not None:
+            subscribers.append(
+                CaseConflictCleanupSubscriber(
+                    fileinfo.case_conflict_submitted,
+                    fileinfo.case_conflict_key,
+                )
+            )
 
     def _submit_transfer_request(self, fileinfo, extra_args, subscribers):
         bucket, key = find_bucket_key(fileinfo.src)
@@ -431,8 +442,7 @@ class CopyRequestSubmitter(BaseTransferRequestSubmitter):
 
     def _add_additional_subscribers(self, subscribers, fileinfo):
         subscribers.append(ProvideSizeSubscriber(fileinfo.size))
-        if self._should_inject_content_type():
-            subscribers.append(ProvideCopyContentTypeSubscriber())
+        subscribers.append(ProvideETagSubscriber(fileinfo.etag))
         if self._cli_params.get('is_move', False):
             subscribers.append(DeleteCopySourceObjectSubscriber(
                 fileinfo.source_client))
@@ -550,9 +560,10 @@ class LocalDeleteRequestSubmitter(BaseTransferRequestSubmitter):
         except Exception as e:
             self._result_queue.put(
                 FailureResult(exception=e, **result_kwargs))
-        finally:
-            # Return True to indicate that the transfer was submitted
-            return True
+        # Return True to indicate that the transfer was submitted.
+        # This is returned regardless of success or failure since
+        # the transfer request was submitted and results were queued.
+        return True
 
     def _format_src_dest(self, fileinfo):
         return self._format_local_path(fileinfo.src), None

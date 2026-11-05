@@ -18,11 +18,12 @@ import zipfile
 from botocore.session import get_session
 from botocore.exceptions import ClientError
 
-from awscli.compat import six
 from awscli.testutils import unittest, mock, FileCreator
 from awscli.customizations.gamelift.uploadbuild import UploadBuildCommand
 from awscli.customizations.gamelift.uploadbuild import zip_directory
 from awscli.customizations.gamelift.uploadbuild import validate_directory
+from awscli.customizations.gamelift.uploadbuild import parse_tags
+from awscli.compat import StringIO
 
 
 class TestGetGameSessionLogCommand(unittest.TestCase):
@@ -142,13 +143,12 @@ class TestGetGameSessionLogCommand(unittest.TestCase):
             OperatingSystem=operating_system)
 
     def test_error_message_when_directory_is_empty(self):
-        with mock.patch('sys.stderr', six.StringIO()) as mock_stderr:
+        with mock.patch('sys.stderr', StringIO()) as mock_stderr:
             self.cmd(self.args, self.global_args)
             self.assertEqual(
                 mock_stderr.getvalue(),
-                'Fail to upload %s. '
+                f'Fail to upload {self.build_root}. '
                 'The build root directory is empty or does not exist.\n'
-                % (self.build_root)
             )
 
     def test_error_message_when_directory_is_not_provided(self):
@@ -158,12 +158,12 @@ class TestGetGameSessionLogCommand(unittest.TestCase):
             '--build-root', ''
         ]
 
-        with mock.patch('sys.stderr', six.StringIO()) as mock_stderr:
+        with mock.patch('sys.stderr', StringIO()) as mock_stderr:
             self.cmd(self.args, self.global_args)
             self.assertEqual(
                 mock_stderr.getvalue(),
-                'Fail to upload %s. '
-                'The build root directory is empty or does not exist.\n' % ('')
+                'Fail to upload {}. '
+                'The build root directory is empty or does not exist.\n'.format('')
             )
 
     def test_error_message_when_directory_does_not_exist(self):
@@ -175,13 +175,12 @@ class TestGetGameSessionLogCommand(unittest.TestCase):
             '--build-root', dir_not_exist
         ]
 
-        with mock.patch('sys.stderr', six.StringIO()) as mock_stderr:
+        with mock.patch('sys.stderr', StringIO()) as mock_stderr:
             self.cmd(self.args, self.global_args)
             self.assertEqual(
                 mock_stderr.getvalue(),
-                'Fail to upload %s. '
+                f'Fail to upload {dir_not_exist}. '
                 'The build root directory is empty or does not exist.\n'
-                % (dir_not_exist)
             )
 
     def test_temporary_file_does_exist_when_fails(self):
@@ -193,6 +192,66 @@ class TestGetGameSessionLogCommand(unittest.TestCase):
             tempfile_path = self.upload_file_mock.call_args[0][0]
             # Make sure the temporary file is removed.
             self.assertFalse(os.path.exists(tempfile_path))
+
+    def test_upload_build_when_server_sdk_version_is_provided(self):
+        server_sdk_version = '4.0.2'
+        self.file_creator.create_file('tmpfile', 'Some contents')
+        self.args = [
+            '--name', self.build_name, '--build-version', self.build_version,
+            '--build-root', self.build_root,
+            '--server-sdk-version', server_sdk_version
+        ]
+        self.cmd(self.args, self.global_args)
+
+        # Ensure the GameLift client was called correctly.
+        self.gamelift_client.create_build.assert_called_once_with(
+            Name=self.build_name, Version=self.build_version,
+            ServerSdkVersion=server_sdk_version)
+
+    def test_upload_build_when_tags_are_provided(self):
+        self.file_creator.create_file('tmpfile', 'Some contents')
+        self.args = [
+            '--name', self.build_name, '--build-version', self.build_version,
+            '--build-root', self.build_root,
+            '--tags', 'Environment=Production', 'Team=GameDev'
+        ]
+        self.cmd(self.args, self.global_args)
+
+        self.gamelift_client.create_build.assert_called_once_with(
+            Name=self.build_name, Version=self.build_version,
+            Tags=[
+                {'Key': 'Environment', 'Value': 'Production'},
+                {'Key': 'Team', 'Value': 'GameDev'}
+            ])
+
+
+class TestParseTags(unittest.TestCase):
+    def test_parse_tags_with_key_value_pairs(self):
+        result = parse_tags(['Key1=Value1', 'Key2=Value2'])
+        self.assertEqual(result, [
+            {'Key': 'Key1', 'Value': 'Value1'},
+            {'Key': 'Key2', 'Value': 'Value2'}
+        ])
+
+    def test_parse_tags_with_empty_value(self):
+        result = parse_tags(['Key1='])
+        self.assertEqual(result, [{'Key': 'Key1', 'Value': ''}])
+
+    def test_parse_tags_without_equals(self):
+        result = parse_tags(['Key1'])
+        self.assertEqual(result, [{'Key': 'Key1', 'Value': ''}])
+
+    def test_parse_tags_with_equals_in_value(self):
+        result = parse_tags(['Key1=Value=WithEquals'])
+        self.assertEqual(result, [{'Key': 'Key1', 'Value': 'Value=WithEquals'}])
+
+    def test_parse_tags_with_none(self):
+        result = parse_tags(None)
+        self.assertEqual(result, [])
+
+    def test_parse_tags_with_empty_list(self):
+        result = parse_tags([])
+        self.assertEqual(result, [])
 
 
 class TestZipDirectory(unittest.TestCase):

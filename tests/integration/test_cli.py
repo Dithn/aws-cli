@@ -14,13 +14,13 @@ import time
 import signal
 import os
 import tempfile
-import random
 import shutil
 
 import botocore.session
 from awscli.testutils import unittest, aws, BaseS3CLICommand
 from awscli.testutils import temporary_file
 from awscli.testutils import skip_if_windows
+from awscli.testutils import random_bucket_name
 from awscli.clidriver import create_clidriver
 
 
@@ -34,8 +34,9 @@ class TestBasicCommandFunctionality(unittest.TestCase):
     def put_object(self, bucket, key, content, extra_args=None):
         session = botocore.session.get_session()
         client = session.create_client('s3', 'us-east-1')
-        client.create_bucket(Bucket=bucket)
+        client.create_bucket(Bucket=bucket, ObjectOwnership='ObjectWriter')
         time.sleep(5)
+        client.delete_public_access_block(Bucket=bucket)
         self.addCleanup(client.delete_bucket, Bucket=bucket)
         call_args = {
             'Bucket': bucket,
@@ -58,13 +59,13 @@ class TestBasicCommandFunctionality(unittest.TestCase):
         p = aws('help')
         self.assertEqual(p.rc, 0)
         self.assertIn('AWS', p.stdout)
-        self.assertRegexpMatches(
-            p.stdout, 'The\s+AWS\s+Command\s+Line\s+Interface')
+        self.assertRegex(
+            p.stdout, r'The\s+AWS\s+Command\s+Line\s+Interface')
 
     def test_service_help_output(self):
         p = aws('ec2 help')
         self.assertEqual(p.rc, 0)
-        self.assertIn('Amazon EC2', p.stdout)
+        self.assertRegex(p.stdout, r'Amazon\s+EC2')
 
     def test_operation_help_output(self):
         p = aws('ec2 describe-instances help')
@@ -74,25 +75,24 @@ class TestBasicCommandFunctionality(unittest.TestCase):
         # For now we're making the test less strict about formatting, but
         # we eventually should update this test to check exactly for
         # 'The describe-instances operation'.
-        self.assertRegexpMatches(p.stdout,
-                                 '\s+Describes\s+the\s+specified\s+instances')
+        self.assertRegex(p.stdout, r'\s+Describes\s+the\s+specified\s+instances')
 
     def test_topic_list_help_output(self):
         p = aws('help topics')
         self.assertEqual(p.rc, 0)
-        self.assertRegexpMatches(p.stdout, '\s+AWS\s+CLI\s+Topic\s+Guide')
-        self.assertRegexpMatches(
+        self.assertRegex(p.stdout, r'\s+AWS\s+CLI\s+Topic\s+Guide')
+        self.assertRegex(
             p.stdout,
-            '\s+This\s+is\s+the\s+AWS\s+CLI\s+Topic\s+Guide'
+            r'\s+This\s+is\s+the\s+AWS\s+CLI\s+Topic\s+Guide'
         )
 
     def test_topic_help_output(self):
         p = aws('help return-codes')
         self.assertEqual(p.rc, 0)
-        self.assertRegexpMatches(p.stdout, '\s+AWS\s+CLI\s+Return\s+Codes')
-        self.assertRegexpMatches(
+        self.assertRegex(p.stdout, r'\s+AWS\s+CLI\s+Return\s+Codes')
+        self.assertRegex(
             p.stdout,
-            'These\s+are\s+the\s+following\s+return\s+codes'
+            r'These\s+are\s+the\s+following\s+return\s+codes'
         )
 
     def test_operation_help_with_required_arg(self):
@@ -118,11 +118,11 @@ class TestBasicCommandFunctionality(unittest.TestCase):
         self.assertEqual(p.stderr, '')
 
     def test_help_with_warning_blocks(self):
-        p = aws('elastictranscoder create-pipeline help')
+        p = aws('bedrock-runtime invoke-model help')
         self.assertEqual(p.rc, 0, p.stderr)
         # Check text that appears in the warning block to ensure
         # the block was actually rendered.
-        self.assertRegexpMatches(p.stdout, 'To\s+receive\s+notifications')
+        self.assertRegex(p.stdout, r"To\s+deny\s+all\s+inference\s+access")
 
     def test_param_shorthand(self):
         p = aws(
@@ -159,8 +159,7 @@ class TestBasicCommandFunctionality(unittest.TestCase):
     def test_streaming_output_operation(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d)
-        bucket_name = 'clistream' + str(
-            int(time.time())) + str(random.randint(1, 100))
+        bucket_name = random_bucket_name('clistream')
 
         self.put_object(bucket=bucket_name, key='foobar',
                         content='foobar contents')
@@ -179,8 +178,7 @@ class TestBasicCommandFunctionality(unittest.TestCase):
         env_vars['AWS_ACCESS_KEY_ID'] = 'foo'
         env_vars['AWS_SECRET_ACCESS_KEY'] = 'bar'
 
-        bucket_name = 'nosign' + str(
-            int(time.time())) + str(random.randint(1, 100))
+        bucket_name = random_bucket_name('nosign')
         self.put_object(bucket_name, 'foo', content='bar',
                         extra_args={'ACL': 'public-read-write'})
 
@@ -203,8 +201,7 @@ class TestBasicCommandFunctionality(unittest.TestCase):
     def test_no_paginate_arg(self):
         d = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, d)
-        bucket_name = 'nopaginate' + str(
-            int(time.time())) + str(random.randint(1, 100))
+        bucket_name = random_bucket_name('nopaginate')
 
         self.put_object(bucket=bucket_name, key='foobar',
                         content='foobar contents')
@@ -269,6 +266,15 @@ class TestBasicCommandFunctionality(unittest.TestCase):
         version_output = p.stderr.startswith('aws-cli') or \
             p.stdout.startswith('aws-cli')
         self.assertTrue(version_output, p.stderr)
+
+    def test_version_does_not_create_cache_directory(self):
+        # Regression test: --version should not create any files/directories.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env = os.environ.copy()
+            env['HOME'] = tmpdir
+            aws('--version', env_vars=env)
+            aws_dir = os.path.join(tmpdir, '.aws')
+            self.assertFalse(os.path.exists(aws_dir))
 
     def test_traceback_printed_when_debug_on(self):
         p = aws('ec2 describe-instances --filters BADKEY=foo --debug')

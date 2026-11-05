@@ -15,7 +15,7 @@ import os
 from awscli.customizations.configure import configure, ConfigValue, NOT_SET
 from awscli.customizations.configure import profile_to_section
 from awscli.testutils import mock, unittest
-from awscli.compat import six
+from awscli.compat import StringIO
 
 from . import FakeSession
 
@@ -37,7 +37,8 @@ class TestConfigureCommand(unittest.TestCase):
         credentials_file_call = called_args[0]
         expected_creds_file = os.path.expanduser('~/fake_credentials_filename')
         self.assertEqual(credentials_file_call,
-                         mock.call(new_values, expected_creds_file))
+                         mock.call(new_values, expected_creds_file,
+                                   check_permissions=True))
 
     def test_configure_command_sends_values_to_writer(self):
         self.configure(args=[], parsed_globals=self.global_args)
@@ -80,7 +81,7 @@ class TestConfigureCommand(unittest.TestCase):
         # Test the case where the user only wants to change a single_value.
         responses = {
             "AWS Access Key ID": None,
-            "AWS Secert Access Key": None,
+            "AWS Secret Access Key": None,
             "Default region name": None,
             "Default output format": "NEW OUTPUT FORMAT",
         }
@@ -129,13 +130,29 @@ class TestConfigureCommand(unittest.TestCase):
              'region': 'new_value',
              'output': 'new_value'}, 'myconfigfile')
 
+    def test_check_permissions_when_credential_values_provided(self):
+        self.configure(args=[], parsed_globals=self.global_args)
+        expected_creds_file = os.path.expanduser('~/fake_credentials_filename')
+        self.writer.update_config.assert_any_call(
+            mock.ANY, expected_creds_file, check_permissions=True
+        )
+
+    def test_no_check_permissions_when_no_credential_values_changed(self):
+        user_presses_enter = None
+        precanned = PrecannedPrompter(value=user_presses_enter)
+        self.configure = configure.ConfigureCommand(
+            self.session, prompter=precanned, config_writer=self.writer
+        )
+        self.configure(args=[], parsed_globals=self.global_args)
+        self.writer.update_config.assert_not_called()
+
 
 class TestInteractivePrompter(unittest.TestCase):
 
     def setUp(self):
         self.input_patch = mock.patch('awscli.compat.raw_input')
         self.mock_raw_input = self.input_patch.start()
-        self.stdout = six.StringIO()
+        self.stdout = StringIO()
         self.stdout_patch = mock.patch('sys.stdout', self.stdout)
         self.stdout_patch.start()
 
@@ -154,7 +171,7 @@ class TestInteractivePrompter(unittest.TestCase):
         # We should also not display the entire access key.
         prompt_text = self.stdout.getvalue()
         self.assertNotIn('myaccesskey', prompt_text)
-        self.assertRegexpMatches(prompt_text, r'\[\*\*\*\*.*\]')
+        self.assertRegex(prompt_text, r'\[\*\*\*\*.*\]')
 
     def test_access_key_not_masked_when_none(self):
         self.mock_raw_input.return_value = 'foo'
@@ -176,7 +193,7 @@ class TestInteractivePrompter(unittest.TestCase):
         # We should also not display the entire secret key.
         prompt_text = self.stdout.getvalue()
         self.assertNotIn('mysupersecretkey', prompt_text)
-        self.assertRegexpMatches(prompt_text, r'\[\*\*\*\*.*\]')
+        self.assertRegex(prompt_text, r'\[\*\*\*\*.*\]')
 
     def test_non_secret_keys_are_not_masked(self):
         prompter = configure.InteractivePrompter()
@@ -186,7 +203,7 @@ class TestInteractivePrompter(unittest.TestCase):
         # We should also not display the entire secret key.
         prompt_text = self.stdout.getvalue()
         self.assertIn('mycurrentvalue', prompt_text)
-        self.assertRegexpMatches(prompt_text, r'\[mycurrentvalue\]')
+        self.assertRegex(prompt_text, r'\[mycurrentvalue\]')
 
     def test_user_hits_enter_returns_none(self):
         # If a user hits enter, then raw_input returns the empty string.

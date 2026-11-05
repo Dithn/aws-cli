@@ -62,10 +62,10 @@ class FileFormat(object):
         """
         This function formats the path of local files and returns whether the
         destination will keep its own name or take the source's name along with
-        the editted path.
+        the edited path.
         Formatting Rules:
             1) If a destination file is taking on a source name, it must end
-               with the apporpriate operating system seperator
+               with the appropriate operating system separator
 
         General Options:
             1) If the operation is on a directory, the destination file will
@@ -73,11 +73,11 @@ class FileFormat(object):
             2) If the path of the destination exists and is a directory it
                will always use the name of the source file.
             3) If the destination path ends with the appropriate operating
-               system seperator but is not an existing directory, the
+               system separator but is not an existing directory, the
                appropriate directories will be made and the file will use the
                source's name.
             4) If the destination path does not end with the appropriate
-               operating system seperator and is not an existing directory, the
+               operating system separator and is not an existing directory, the
                appropriate directories will be created and the file name will
                be of the one provided.
         """
@@ -124,7 +124,7 @@ class FileFormat(object):
         """
         It identifies whether the path is from local or s3.  Returns the
         adjusted pathname and a string stating whether the file is from local
-        or s3.  If from s3 it strips off the s3:// from the beginnning of the
+        or s3.  If from s3 it strips off the s3:// from the beginning of the
         path
         """
         if path.startswith('s3://'):

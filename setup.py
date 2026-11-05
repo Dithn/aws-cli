@@ -24,12 +24,13 @@ def find_version(*file_paths):
 
 
 install_requires = [
-    'botocore==1.21.48',
-    'docutils>=0.10,<0.16',
-    's3transfer>=0.5.0,<0.6.0',
-    'PyYAML>=3.10,<5.5',
-    'colorama>=0.2.5,<0.4.4',
+    'docutils>=0.18.1,<=0.19',
+    'PyYAML>=3.10,<6.1',
+    'colorama>=0.2.5,<0.4.7',
     'rsa>=3.1.2,<4.8',
+    'jmespath>=0.7.1,<2.0.0',
+    'python-dateutil>=2.1,<3.0.0',
+    'urllib3>=1.25.4,!=2.2.0,<3',
 ]
 
 
@@ -44,14 +45,11 @@ setup_options = dict(
              'bin/aws_completer', 'bin/aws_zsh_completer.sh',
              'bin/aws_bash_completer'],
     packages=find_packages(exclude=['tests*']),
-    package_data={'awscli': ['data/*.json', 'examples/*/*.rst',
-                             'examples/*/*.txt', 'examples/*/*/*.txt',
-                             'examples/*/*/*.rst', 'topics/*.rst',
-                             'topics/*.json']},
+    include_package_data=True,
     install_requires=install_requires,
-    extras_require={},
+    extras_require={'crt': ['awscrt==0.36.0']},
     license="Apache License 2.0",
-    python_requires=">= 3.6",
+    python_requires=">= 3.10",
     classifiers=[
         'Development Status :: 5 - Production/Stable',
         'Intended Audience :: Developers',
@@ -60,10 +58,18 @@ setup_options = dict(
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.6',
-        'Programming Language :: Python :: 3.7',
-        'Programming Language :: Python :: 3.8',
+        'Programming Language :: Python :: 3 :: Only',
+        'Programming Language :: Python :: 3.10',
+        'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
+        'Programming Language :: Python :: 3.13',
+        'Programming Language :: Python :: 3.14',
     ],
+    project_urls={
+        'Source': 'https://github.com/aws/aws-cli',
+        'Reference': 'https://docs.aws.amazon.com/cli/latest/reference/',
+        'Changelog': 'https://github.com/aws/aws-cli/blob/develop/CHANGELOG.rst',
+    },
 )
 
 

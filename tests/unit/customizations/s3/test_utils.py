@@ -20,8 +20,8 @@ import ntpath
 import time
 import datetime
 
+import pytest
 from dateutil.tz import tzlocal
-from nose.tools import assert_equal
 from s3transfer.futures import TransferMeta, TransferFuture
 from s3transfer.compat import seekable
 from botocore.hooks import HierarchicalEmitter
@@ -35,58 +35,87 @@ from awscli.customizations.s3.utils import (
     StablePriorityQueue, BucketLister, get_file_stat, AppendFilter,
     create_warning, human_readable_size, human_readable_to_bytes,
     set_file_utime, SetFileUtimeError, RequestParamsMapper, StdoutBytesWriter,
-    ProvideSizeSubscriber, OnDoneFilteredSubscriber,
+    ProvideSizeSubscriber, ProvideETagSubscriber, OnDoneFilteredSubscriber,
     ProvideUploadContentTypeSubscriber, ProvideCopyContentTypeSubscriber,
     ProvideLastModifiedTimeSubscriber, DirectoryCreatorSubscriber,
     DeleteSourceObjectSubscriber, DeleteSourceFileSubscriber,
-    DeleteCopySourceObjectSubscriber, NonSeekableStream, CreateDirectoryError)
+    DeleteCopySourceObjectSubscriber, NonSeekableStream, CreateDirectoryError,
+    S3PathResolver, CaseConflictCleanupSubscriber,
+    is_account_regional_namespace_bucket)
 from awscli.customizations.s3.results import WarningResult
 from tests.unit.customizations.s3 import FakeTransferFuture
 from tests.unit.customizations.s3 import FakeTransferFutureMeta
 from tests.unit.customizations.s3 import FakeTransferFutureCallArgs
 
 
-def test_human_readable_size():
-    yield _test_human_size_matches, 1, '1 Byte'
-    yield _test_human_size_matches, 10, '10 Bytes'
-    yield _test_human_size_matches, 1000, '1000 Bytes'
-    yield _test_human_size_matches, 1024, '1.0 KiB'
-    yield _test_human_size_matches, 1024 ** 2, '1.0 MiB'
-    yield _test_human_size_matches, 1024 ** 2, '1.0 MiB'
-    yield _test_human_size_matches, 1024 ** 3, '1.0 GiB'
-    yield _test_human_size_matches, 1024 ** 4, '1.0 TiB'
-    yield _test_human_size_matches, 1024 ** 5, '1.0 PiB'
-    yield _test_human_size_matches, 1024 ** 6, '1.0 EiB'
-
-    # Round to the nearest block.
-    yield _test_human_size_matches, 1024 ** 2 - 1, '1.0 MiB'
-    yield _test_human_size_matches, 1024 ** 3 - 1, '1.0 GiB'
+@pytest.fixture
+def s3control_client():
+    client = mock.MagicMock()
+    client.get_access_point.return_value = {
+        "Bucket": "mybucket"
+    }
+    client.list_multi_region_access_points.return_value = {
+        "AccessPoints": [{
+            "Alias": "myalias.mrap",
+            "Regions": [{"Bucket": "mybucket"}]
+        }]
+    }
+    return client
 
 
-def _test_human_size_matches(bytes_int, expected):
-    assert_equal(human_readable_size(bytes_int), expected)
+@pytest.fixture
+def sts_client():
+    client = mock.MagicMock()
+    client.get_caller_identity.return_value = {
+        "Account": "123456789012"
+    }
+    return client
 
 
-def test_convert_human_readable_to_bytes():
-    yield _test_convert_human_readable_to_bytes, "1", 1
-    yield _test_convert_human_readable_to_bytes, "1024", 1024
-    yield _test_convert_human_readable_to_bytes, "1KB", 1024
-    yield _test_convert_human_readable_to_bytes, "1kb", 1024
-    yield _test_convert_human_readable_to_bytes, "1MB", 1024 ** 2
-    yield _test_convert_human_readable_to_bytes, "1GB", 1024 ** 3
-    yield _test_convert_human_readable_to_bytes, "1TB", 1024 ** 4
-
-    # Also because of the "ls" output for s3, we support
-    # the IEC "mebibyte" format (MiB).
-    yield _test_convert_human_readable_to_bytes, "1KiB", 1024
-    yield _test_convert_human_readable_to_bytes, "1kib", 1024
-    yield _test_convert_human_readable_to_bytes, "1MiB", 1024 ** 2
-    yield _test_convert_human_readable_to_bytes, "1GiB", 1024 ** 3
-    yield _test_convert_human_readable_to_bytes, "1TiB", 1024 ** 4
+@pytest.fixture
+def s3_path_resolver(s3control_client, sts_client):
+    return S3PathResolver(s3control_client, sts_client)
 
 
-def _test_convert_human_readable_to_bytes(size_str, expected):
-    assert_equal(human_readable_to_bytes(size_str), expected)
+@pytest.mark.parametrize(
+    'bytes_int, expected',
+    (
+        (1, '1 Byte'),
+        (10, '10 Bytes'),
+        (1000, '1000 Bytes'),
+        (1024, '1.0 KiB'),
+        (1024 ** 2, '1.0 MiB'),
+        (1024 ** 3, '1.0 GiB'),
+        (1024 ** 4, '1.0 TiB'),
+        (1024 ** 5, '1.0 PiB'),
+        (1024 ** 6, '1.0 EiB'),
+        (1024 ** 2 - 1, '1.0 MiB'),
+        (1024 ** 3 - 1, '1.0 GiB'),
+    )
+)
+def test_human_readable_size(bytes_int, expected):
+    assert human_readable_size(bytes_int) == expected
+
+
+@pytest.mark.parametrize(
+    'size_str, expected',
+    (
+        ("1", 1),
+        ("1024", 1024),
+        ("1KB", 1024),
+        ("1kb", 1024),
+        ("1MB", 1024 ** 2),
+        ("1GB", 1024 ** 3),
+        ("1TB", 1024 ** 4),
+        ("1KiB", 1024),
+        ("1kib", 1024),
+        ("1MiB", 1024 ** 2),
+        ("1GiB", 1024 ** 3),
+        ("1TiB", 1024 ** 4),
+    )
+)
+def test_convert_human_readable_to_bytes(size_str, expected):
+    assert human_readable_to_bytes(size_str) == expected
 
 
 class AppendFilterTest(unittest.TestCase):
@@ -332,6 +361,44 @@ class TestBlockUnsupportedResources(unittest.TestCase):
             )
 
 
+class TestIsAccountRegionalNamespaceBucket(unittest.TestCase):
+    def test_matches_standard_pattern(self):
+        self.assertTrue(
+            is_account_regional_namespace_bucket(
+                'amzn-s3-demo-bucket-111122223333-us-west-2-an'
+            )
+        )
+
+    def test_matches_different_region(self):
+        self.assertTrue(
+            is_account_regional_namespace_bucket(
+                'my-bucket-123456789012-eu-central-1-an'
+            )
+        )
+
+    def test_no_match_regular_bucket(self):
+        self.assertFalse(
+            is_account_regional_namespace_bucket('my-regular-bucket')
+        )
+
+    def test_no_match_missing_an_suffix(self):
+        self.assertFalse(
+            is_account_regional_namespace_bucket(
+                'bucket-111122223333-us-west-2'
+            )
+        )
+
+    def test_matches_short_bucket_name(self):
+        self.assertTrue(
+            is_account_regional_namespace_bucket('xyz-an')
+        )
+
+    def test_no_match_express_directory_bucket(self):
+        self.assertFalse(
+            is_account_regional_namespace_bucket('bucket--usw2-az1--x-s3')
+        )
+
+
 class TestCreateWarning(unittest.TestCase):
     def test_create_warning(self):
         path = '/foo/'
@@ -501,7 +568,7 @@ class TestGetFileStat(unittest.TestCase):
 
     def test_error_message(self):
         with mock.patch('os.stat', mock.Mock(side_effect=IOError('msg'))):
-            with self.assertRaisesRegex(ValueError, 'myfilename\.txt'):
+            with self.assertRaisesRegex(ValueError, r'myfilename\.txt'):
                 get_file_stat('myfilename.txt')
 
     def assert_handles_fromtimestamp_error(self, error):
@@ -637,6 +704,56 @@ class TestRequestParamsMapperSSE(unittest.TestCase):
              'SSECustomerKey': 'my-sse-c-key'})
 
 
+class TestRequestParamsMapperChecksumAlgorithm:
+    @pytest.fixture
+    def cli_params(self):
+        return {'checksum_algorithm': 'CRC32'}
+
+    @pytest.fixture
+    def cli_params_no_algorithm(self):
+        return {}
+
+    def test_put_object(self, cli_params):
+        request_params = {}
+        RequestParamsMapper.map_put_object_params(request_params, cli_params)
+        assert request_params == {'ChecksumAlgorithm': 'CRC32'}
+
+    def test_put_object_no_checksum(self, cli_params_no_algorithm):
+        request_params = {}
+        RequestParamsMapper.map_put_object_params(request_params, cli_params_no_algorithm)
+        assert 'ChecksumAlgorithm' not in request_params
+
+    def test_copy_object(self, cli_params):
+        request_params = {}
+        RequestParamsMapper.map_copy_object_params(request_params, cli_params)
+        assert request_params == {'ChecksumAlgorithm': 'CRC32'}
+
+    def test_copy_object_no_checksum(self, cli_params_no_algorithm):
+        request_params = {}
+        RequestParamsMapper.map_put_object_params(request_params, cli_params_no_algorithm)
+        assert 'ChecksumAlgorithm' not in request_params
+
+
+class TestRequestParamsMapperChecksumMode:
+    @pytest.fixture
+    def cli_params(self):
+        return {'checksum_mode': 'ENABLED'}
+
+    @pytest.fixture
+    def cli_params_no_checksum(self):
+        return {}
+
+    def test_get_object(self, cli_params):
+        request_params = {}
+        RequestParamsMapper.map_get_object_params(request_params, cli_params)
+        assert request_params == {'ChecksumMode': 'ENABLED'}
+
+    def test_get_object_no_checksums(self, cli_params_no_checksum):
+        request_params = {}
+        RequestParamsMapper.map_get_object_params(request_params, cli_params_no_checksum)
+        assert 'ChecksumMode' not in request_params
+
+
 class TestRequestParamsMapperRequestPayer(unittest.TestCase):
     def setUp(self):
         self.cli_params = {'request_payer': 'requester'}
@@ -714,6 +831,19 @@ class TestProvideSizeSubscriber(unittest.TestCase):
         subscriber = ProvideSizeSubscriber(10)
         subscriber.on_queued(self.transfer_future)
         self.assertEqual(self.transfer_meta.size, 10)
+
+
+class TestProvideEtagSubscriber:
+    def test_etag_set(self):
+        transfer_meta = TransferMeta()
+        transfer_future = mock.Mock(spec=TransferFuture)
+        transfer_future.meta = transfer_meta
+        etag = 'myetag'
+
+        transfer_meta.provide_object_etag('oldetag')
+        subscriber = ProvideETagSubscriber(etag)
+        subscriber.on_queued(transfer_future)
+        assert transfer_meta.etag == etag
 
 
 class OnDoneFilteredRecordingSubscriber(OnDoneFilteredSubscriber):
@@ -849,18 +979,18 @@ class TestDirectoryCreatorSubscriber(BaseTestWithFileCreator):
         # The directory should still exist
         self.assertTrue(os.path.exists(self.directory_to_create))
 
-    def test_on_queued_failure_propogates_create_directory_error(self):
+    def test_on_queued_failure_propagates_create_directory_error(self):
         # If makedirs() raises an OSError of exception, we should
-        # propogate the exception with a better worded CreateDirectoryError.
+        # propagate the exception with a better worded CreateDirectoryError.
         with mock.patch('os.makedirs') as makedirs_patch:
             makedirs_patch.side_effect = OSError()
             with self.assertRaises(CreateDirectoryError):
                 self.subscriber.on_queued(self.future)
         self.assertFalse(os.path.exists(self.directory_to_create))
 
-    def test_on_queued_failure_propogates_clear_error_message(self):
+    def test_on_queued_failure_propagates_clear_error_message(self):
         # If makedirs() raises an OSError of exception, we should
-        # propogate the exception.
+        # propagate the exception.
         with mock.patch('os.makedirs') as makedirs_patch:
             os_error = OSError()
             os_error.errno = errno.EEXIST
@@ -978,3 +1108,155 @@ class TestNonSeekableStream(unittest.TestCase):
     def test_can_specify_amount_for_nonseekable_stream(self):
         nonseekable_fileobj = NonSeekableStream(StringIO('foobar'))
         self.assertEqual(nonseekable_fileobj.read(3), 'foo')
+
+
+class TestS3PathResolver:
+    _BASE_ACCESSPOINT_ARN = (
+        "s3://arn:aws:s3:us-west-2:123456789012:accesspoint/myaccesspoint")
+    _BASE_OUTPOST_ACCESSPOINT_ARN = (
+        "s3://arn:aws:s3-outposts:us-east-1:123456789012:outpost"
+        "/op-foo/accesspoint/myaccesspoint")
+    _BASE_ACCESSPOINT_ALIAS = "s3://myaccesspoint-foobar12345-s3alias"
+    _BASE_OUTPOST_ACCESSPOINT_ALIAS = "s3://myaccesspoint-foobar12345--op-s3"
+    _BASE_MRAP_ARN = "s3://arn:aws:s3::123456789012:accesspoint/myalias.mrap"
+
+    @pytest.mark.parametrize(
+        "path,resolved",
+        [(_BASE_ACCESSPOINT_ARN,"s3://mybucket/"),
+         (f"{_BASE_ACCESSPOINT_ARN}/","s3://mybucket/"),
+         (f"{_BASE_ACCESSPOINT_ARN}/mykey","s3://mybucket/mykey"),
+         (f"{_BASE_ACCESSPOINT_ARN}/myprefix/","s3://mybucket/myprefix/"),
+         (f"{_BASE_ACCESSPOINT_ARN}/myprefix/mykey",
+          "s3://mybucket/myprefix/mykey")]
+    )
+    def test_resolves_accesspoint_arn(
+        self, path, resolved, s3_path_resolver, s3control_client
+    ):
+        resolved_paths = s3_path_resolver.resolve_underlying_s3_paths(path)
+        assert resolved_paths == [resolved]
+        s3control_client.get_access_point.assert_called_with(
+            AccountId="123456789012",
+            Name="myaccesspoint"
+        )
+
+    @pytest.mark.parametrize(
+        "path,resolved",
+        [(_BASE_OUTPOST_ACCESSPOINT_ARN,"s3://mybucket/"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ARN}/","s3://mybucket/"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ARN}/mykey","s3://mybucket/mykey"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ARN}/myprefix/",
+          "s3://mybucket/myprefix/"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ARN}/myprefix/mykey",
+          "s3://mybucket/myprefix/mykey")]
+    )
+    def test_resolves_outpost_accesspoint_arn(
+        self, path, resolved, s3_path_resolver, s3control_client
+    ):
+        resolved_paths = s3_path_resolver.resolve_underlying_s3_paths(path)
+        assert resolved_paths == [resolved]
+        s3control_client.get_access_point.assert_called_with(
+            AccountId="123456789012",
+            Name=("arn:aws:s3-outposts:us-east-1:123456789012:outpost"
+                  "/op-foo/accesspoint/myaccesspoint")
+        )
+
+    @pytest.mark.parametrize(
+        "path,resolved",
+        [(_BASE_ACCESSPOINT_ALIAS,"s3://mybucket/"),
+         (f"{_BASE_ACCESSPOINT_ALIAS}/","s3://mybucket/"),
+         (f"{_BASE_ACCESSPOINT_ALIAS}/mykey","s3://mybucket/mykey"),
+         (f"{_BASE_ACCESSPOINT_ALIAS}/myprefix/","s3://mybucket/myprefix/"),
+         (f"{_BASE_ACCESSPOINT_ALIAS}/myprefix/mykey",
+          "s3://mybucket/myprefix/mykey")]
+    )
+    def test_resolves_accesspoint_alias(
+        self, path, resolved, s3_path_resolver, s3control_client, sts_client
+    ):
+        resolved_paths = s3_path_resolver.resolve_underlying_s3_paths(path)
+        assert resolved_paths == [resolved]
+        sts_client.get_caller_identity.assert_called_once()
+        s3control_client.get_access_point.assert_called_with(
+            AccountId="123456789012",
+            Name="myaccesspoint-foobar12345-s3alias"
+        )
+
+    @pytest.mark.parametrize(
+        "path",
+        [(_BASE_OUTPOST_ACCESSPOINT_ALIAS),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ALIAS}/"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ALIAS}/mykey"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ALIAS}/myprefix/"),
+         (f"{_BASE_OUTPOST_ACCESSPOINT_ALIAS}/myprefix/mykey")]
+    )
+    def test_outpost_accesspoint_alias_raises_exception(
+        self, path, s3_path_resolver
+    ):
+        with pytest.raises(ValueError) as e:
+            s3_path_resolver.resolve_underlying_s3_paths(path)
+        assert "Can't resolve underlying bucket name" in str(e.value)
+
+    @pytest.mark.parametrize(
+        "path,resolved",
+        [(_BASE_MRAP_ARN,"s3://mybucket/"),
+         (f"{_BASE_MRAP_ARN}/","s3://mybucket/"),
+         (f"{_BASE_MRAP_ARN}/mykey","s3://mybucket/mykey"),
+         (f"{_BASE_MRAP_ARN}/myprefix/","s3://mybucket/myprefix/"),
+         (f"{_BASE_MRAP_ARN}/myprefix/mykey","s3://mybucket/myprefix/mykey")]
+    )
+    def test_resolves_mrap_arn(
+        self, path, resolved, s3_path_resolver, s3control_client
+    ):
+        resolved_paths = s3_path_resolver.resolve_underlying_s3_paths(path)
+        assert resolved_paths == [resolved]
+        s3control_client.list_multi_region_access_points.assert_called_with(
+            AccountId="123456789012"
+        )
+
+    @pytest.mark.parametrize(
+            "path,resolved,name",
+            [(f"{_BASE_ACCESSPOINT_ARN}-s3alias/mykey","s3://mybucket/mykey",
+              "myaccesspoint-s3alias"),
+             (f"{_BASE_OUTPOST_ACCESSPOINT_ARN}--op-s3/mykey",
+              "s3://mybucket/mykey",
+              f"{_BASE_OUTPOST_ACCESSPOINT_ARN[5:]}--op-s3")]
+    )
+    def test_alias_suffixes_dont_match_accesspoint_arns(
+        self, path, resolved, name, s3_path_resolver, s3control_client
+    ):
+        resolved_paths = s3_path_resolver.resolve_underlying_s3_paths(path)
+        assert resolved_paths == [resolved]
+        s3control_client.get_access_point.assert_called_with(
+            AccountId="123456789012",
+            Name=name
+        )
+
+    @pytest.mark.parametrize(
+            "path,expected_has_underlying_s3_path",
+            [(_BASE_ACCESSPOINT_ARN,True),
+             (f"{_BASE_ACCESSPOINT_ARN}/mykey",True),
+             (f"{_BASE_ACCESSPOINT_ARN}/myprefix/mykey",True),
+             (_BASE_ACCESSPOINT_ALIAS,True),
+             (_BASE_OUTPOST_ACCESSPOINT_ARN,True),
+             (_BASE_OUTPOST_ACCESSPOINT_ALIAS,True),
+             (_BASE_MRAP_ARN,True),
+             ("s3://mybucket/",False),
+             ("s3://mybucket/mykey",False),
+             ("s3://mybucket/myprefix/mykey",False)]
+    )
+    def test_has_underlying_s3_path(self, path, expected_has_underlying_s3_path):
+        has_underlying_s3_path = S3PathResolver.has_underlying_s3_path(path)
+        assert has_underlying_s3_path == expected_has_underlying_s3_path
+
+
+class TestCaseConflictCleanupSubscriber:
+    def test_on_done_removes_key_from_set(self):
+        submitted = {123, 456}
+        subscriber = CaseConflictCleanupSubscriber(submitted, 123)
+        subscriber.on_done(future=None)
+        assert submitted == {456}
+
+    def test_on_done_handles_missing_key(self):
+        submitted = {456}
+        subscriber = CaseConflictCleanupSubscriber(submitted, 123)
+        subscriber.on_done(future=None)
+        assert submitted == {456}

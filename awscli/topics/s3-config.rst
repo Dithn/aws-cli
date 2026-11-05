@@ -40,7 +40,7 @@ and ``aws s3api``:
   on your bucket before attempting to use the endpoint. This is mutually
   exclusive with the ``use_dualstack_endpoint`` option.
 * ``use_dualstack_endpoint`` - Use the Amazon S3 dual IPv4 / IPv6 endpoint for
-  all ``s3 `` and ``s3api`` commands.  This is mutually exclusive with the
+  all ``s3`` and ``s3api`` commands.  This is mutually exclusive with the
   ``use_accelerate_endpoint`` option.
 * ``addressing_style`` - Specifies which addressing style to use. This controls
   if the bucket name is in the hostname or part of the URL. Value values are:
@@ -171,7 +171,9 @@ file is divided into chunks.  This configuration option specifies what
 the chunk size (also referred to as the part size) should be.  This
 value can specified using the same semantics as ``multipart_threshold``,
 that is either as the number of bytes as an integer, or using a size
-suffix.
+suffix. If the specified chunk size does not fit within the established
+limits for S3 multipart uploads, the chunk size will be automatically 
+adjusted to a valid value.
 
 
 max_bandwidth
